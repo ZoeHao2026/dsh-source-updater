@@ -1,0 +1,15 @@
+{
+  "name": "dsh-source-updater",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Community Windows source updater for DeepSeek Harness",
+  "license": "MIT",
+  "author": "ZoeHao2026",
+  "repository": "https://github.com/ZoeHao2026/dsh-source-updater.git",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "test": "node --test updater/upgrade-worker.test.mjs updater/baseline-compatibility.test.mjs updater/deploy-updater.test.mjs",
+    "verify:source": "python scripts/verify-public-source.py"
+  }
+}

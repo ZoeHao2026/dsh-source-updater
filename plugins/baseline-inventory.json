@@ -1,0 +1,341 @@
+[
+  {
+    "name": "@local/dsh-adaptive-mode",
+    "version": "0.1.14",
+    "archive": "local-dsh-adaptive-mode-0.1.14.tgz",
+    "archiveSha256": "2f67082d16c140413e481e24574c095ad0e6d17a9cd81a6c9c22b77aed481b7c",
+    "files": [
+      {
+        "path": "cordis.patch.yml",
+        "sha256": "fc7237ddb003501769aebc4ac209a446f10d3401fcbecb16cd1a6bf7ad8bfc32"
+      },
+      {
+        "path": "framework/adaptive-router.md",
+        "sha256": "760c136b34b2d26afd2ff1434cf3a0de1eb98642e0f2479c3180829ef5c40318"
+      },
+      {
+        "path": "framework/dpira-plan.md",
+        "sha256": "e12bc6c9a4a3570ff46e16e7859940325f29b00562e746c661577eebc6b93b5f"
+      },
+      {
+        "path": "framework/dpira.md",
+        "sha256": "c6f979373720fdc3dc0f3ac5fb9c05e04e50d6e4d52c63ecb231009f515fcae9"
+      },
+      {
+        "path": "lib/client.js",
+        "sha256": "3551bc080199d84860cf21010a9cc50529d5170f521c7bda0b10a071cac9ace0"
+      },
+      {
+        "path": "lib/client.js.map",
+        "sha256": "056b10d2c7b3bd19882022082085da7d9b853a4cd2a0501238b1c7366eba6387"
+      },
+      {
+        "path": "lib/dpira-max.js",
+        "sha256": "ce3c28742b80d26791ec80dbc629789ddf5e6e32adc86766ba4ccb07396b1f5a"
+      },
+      {
+        "path": "lib/index.js",
+        "sha256": "cf89f28be54e65346103576cba802f1ef318da5a523eedda1c39aa4c2cbcd4ce"
+      },
+      {
+        "path": "lib/plan-entry.js",
+        "sha256": "e899e09f2533a0763b101cba69f988de6e4047ca1ff80d87e0795455df1ece1e"
+      },
+      {
+        "path": "package.json",
+        "sha256": "55f9627201448c1a85deb62c872275a316db9be2418a1389360caa34294da572"
+      },
+      {
+        "path": "playbooks/change.md",
+        "sha256": "4b302d9dcb86fb034b52b07a4ce1294d6d818d5e5394d540c3cb62142ac2f48b"
+      },
+      {
+        "path": "playbooks/creation.md",
+        "sha256": "cf1a8874f8e2953b3b3e080c733b85fd6c4a9ce5ef1e6a719f04e198e842a0d6"
+      },
+      {
+        "path": "playbooks/diagnosis.md",
+        "sha256": "e0611c33bdcde7f50313ff5195f498cf0b17766618db8ae63746350d44c2a6a7"
+      },
+      {
+        "path": "playbooks/operations.md",
+        "sha256": "ed81ed8a5395a8442a4cd847df9b4c3268629fd0b77941095504aebf68bb2a8f"
+      },
+      {
+        "path": "playbooks/research.md",
+        "sha256": "6d13b05221b923dca91dd1ce19a36ae5b902fb294c094fbd3dbc187fc58185bf"
+      },
+      {
+        "path": "playbooks/review.md",
+        "sha256": "989b86afac47d9254f6253fada440358a049c7c53fffdefb356c4cea87d92590"
+      },
+      {
+        "path": "README.md",
+        "sha256": "bcee05ba0e734fb794eaaaa35228d8e52000d8668ac82782791f485493e09c8d"
+      },
+      {
+        "path": "skills/dsh-runtime-check/SKILL.md",
+        "sha256": "2240d9b2577b6c918c2f988fc2e7344aa78bc8820a07068d8bc13b918d3e2635"
+      },
+      {
+        "path": "sop/operating-contract.md",
+        "sha256": "bea06f2f2d615809dc9cb82cc21fc5889773de25b06baf941b70afb673e70739"
+      },
+      {
+        "path": "workflow/dynamic.md",
+        "sha256": "cb7d8d7edbf632e3ab53a1ed7b7e2549ee0958891b1ccc61645bc32866ed9b79"
+      }
+    ],
+    "originalPrivateBaselineArchiveSha256": "2f67082d16c140413e481e24574c095ad0e6d17a9cd81a6c9c22b77aed481b7c",
+    "archiveReference": "Original private baseline archive digest only; that archive is not distributed. Public copies may redact historical documentation."
+  },
+  {
+    "name": "@local/dsh-code-video-mode",
+    "version": "0.1.3",
+    "archive": "local-dsh-code-video-mode-0.1.3.tgz",
+    "archiveSha256": "1aaf281119febdf8269c497c828bb57c23ea2ddfa6b1e748f138c0cffa513502",
+    "files": [
+      {
+        "path": "cordis.patch.yml",
+        "sha256": "392574bbc71c99b53f594c9232bf5ed5ac59c1056d1e0b63f6bc817febde1cb2"
+      },
+      {
+        "path": "lib/plan-entry.js",
+        "sha256": "fd75c7a7970e1343a297189c33280b4cb90f31446004c18a8dcbc9d3a3e380bf"
+      },
+      {
+        "path": "lib/render-capabilities.js",
+        "sha256": "9496b38b15c12e77dc6de9a1fa8756048bffdd50255f293054782e327f053b75"
+      },
+      {
+        "path": "mode/audio-and-sync.md",
+        "sha256": "f5201dd00f697ed2576a1d0381c21ebac1190ea2988308830869eb2a154ddf8f"
+      },
+      {
+        "path": "mode/operating-contract.md",
+        "sha256": "0a25aaae2acfb1fea35b0f05a220c37c5adbc0b355d5d90203bd3e60076c140a"
+      },
+      {
+        "path": "mode/persona.md",
+        "sha256": "6b240f1759a2550378d5b3d20e5bbdec90e00bcbb55a9bc33f16b546615201fb"
+      },
+      {
+        "path": "mode/pipeline.md",
+        "sha256": "35fbe07b6a0f76a8c2f399ba9f8af11534ff109d143efd1e4efd5f7ae7d7bbf9"
+      },
+      {
+        "path": "mode/tech-stack.md",
+        "sha256": "1bb1820ba8cfdd453a657acf05603b0ee23bff742a912f81d5623edec01f2944"
+      },
+      {
+        "path": "mode/visual-language.md",
+        "sha256": "7c441482bfe9e08a791282f173a2c7b018d6d02dd14212331054e521f685a594"
+      },
+      {
+        "path": "package.json",
+        "sha256": "f5c098dfa0b9ec4609f2384ecb511ca9239de0286b8bebe71e68bf584b1f5eec"
+      },
+      {
+        "path": "playbooks/data-story.md",
+        "sha256": "bdb4799a7b8564fa9d7e91c43455e8ec5d24a676d262e435c3b1fb91c3375b12"
+      },
+      {
+        "path": "playbooks/explainer.md",
+        "sha256": "43f1a6804795ee584e301cfc140d2ac4a1a78ec47b7a372ec4577f09ece75c55"
+      },
+      {
+        "path": "playbooks/product-brand.md",
+        "sha256": "699ea7c6c721960faf8b1144f6870b53d1ffb6562808cd8063f09d138ba871ac"
+      },
+      {
+        "path": "playbooks/short-form.md",
+        "sha256": "cff84a3e525425a2483e3f9ca308a6e62dd58a9dfdcbc295ba7585bbae181127"
+      },
+      {
+        "path": "README.md",
+        "sha256": "902356cbf6a88e2e90996c174db96e1f5313153ba18877926db6ebaa90c0d59b",
+        "originalSha256": "8dadba1608d0a3ccd0c1f1aa75d65f32ed707993fd1c0dd1f5e944850e2c69ee"
+      },
+      {
+        "path": "scripts/build-preset.mjs",
+        "sha256": "1cec5460d2c58d19610f31111bf95dc63146e07e5c856a7e04a90609c16f2505"
+      },
+      {
+        "path": "scripts/run-smoke.mjs",
+        "sha256": "5174936976bc7ba6103104dc1105c4cb559dba30c8864a1f63cc5e011a989bc2"
+      },
+      {
+        "path": "scripts/smoke-lib.mjs",
+        "sha256": "b4674fc11e5e92a8a4bf4c4f2502fbfebb028e39f67ce639033afdd297f8b0a6"
+      },
+      {
+        "path": "skills/video-render-check/SKILL.md",
+        "sha256": "a5f87577e101ef058bf5c171deb851487e4ec61733089de4393ee123ade60117"
+      },
+      {
+        "path": "templates/animation-guide.template.md",
+        "sha256": "08405143b3d0183fdadb8899e4232d4eef7d9ba8984ecf5375bf03a90cc82ef0"
+      },
+      {
+        "path": "templates/storyboard.template.yml",
+        "sha256": "4e820d41b3f33e2afca38a7f9b35445f017aa0e21271e0a90acab7178e05ca92"
+      },
+      {
+        "path": "verification/qc-checklist.md",
+        "sha256": "eec2f3ad63d3b0d67774ddaebba6d8e6df6c08cc58123583a5c2503444667ab9"
+      }
+    ],
+    "originalPrivateBaselineArchiveSha256": "1aaf281119febdf8269c497c828bb57c23ea2ddfa6b1e748f138c0cffa513502",
+    "archiveReference": "Original private baseline archive digest only; that archive is not distributed. Public copies may redact historical documentation."
+  },
+  {
+    "name": "@local/dsh-ui-model-selection-collapsible",
+    "version": "0.2.3",
+    "archive": "local-dsh-ui-model-selection-collapsible-0.2.3.tgz",
+    "archiveSha256": "4efcc43d9688aa5ef16f5a292417a99712f435a8ab14c662a71a79917b9ce7c0",
+    "files": [
+      {
+        "path": "docs/assets/model-selector-expanded.png",
+        "sha256": "337c2f8ba75fafb5657e360c65d90daeaa78130ac7bd2734bb8a9725f6de6c14"
+      },
+      {
+        "path": "docs/assets/model-selector-hero-ai.png",
+        "sha256": "35f26bfd23acb54b9c9e5110ea8f68f3cddbd17c9e27d48f739dea435f968243"
+      },
+      {
+        "path": "docs/assets/model-selector-settings.jpg",
+        "sha256": "62fe66606edf09f984f774edad7feb984d92818f07b74e1b37595a8aa57a8c9f"
+      },
+      {
+        "path": "dsh.bundle.patch",
+        "sha256": "55fb8b6fe141e362f70800d7eea1c963d2181028a1ca409d4c0c7b22ce8ccc33"
+      },
+      {
+        "path": "lib/client.js",
+        "sha256": "b872f4925f575098b6680695fb7fca7ad1058e9f107d3368bbbc53df13e22b6f"
+      },
+      {
+        "path": "lib/client.js.map",
+        "sha256": "e96ec10b3d7bce0097a27138e1d2710557c535c90fe324116936c5beda4d42cc"
+      },
+      {
+        "path": "lib/index.js",
+        "sha256": "80ffcbec31cfb35c786257a044db884368146ef7176307043369d1e04399907e"
+      },
+      {
+        "path": "lib/types/client/ChatModelSelect.d.ts",
+        "sha256": "3d653d071e7561a263ac6cd3507d5cb78d911cf26eb6c9078071ca629988df61"
+      },
+      {
+        "path": "lib/types/client/ChatModelSelect.d.ts.map",
+        "sha256": "db8022099b2147fb35c281a47a46fb12ace5b476db59dd4246d58becb75f3a06"
+      },
+      {
+        "path": "lib/types/client/CollapsibleModelSelect.d.ts",
+        "sha256": "277a9804cd7a3c6c264ad1217b53a5395d1910c369c40c597bf8b2811ab5f2c1"
+      },
+      {
+        "path": "lib/types/client/CollapsibleModelSelect.d.ts.map",
+        "sha256": "ffb7bbaa9853f9ce5977321a5918821c422bc42d566309af179f82dbd667f61c"
+      },
+      {
+        "path": "lib/types/client/index.d.ts",
+        "sha256": "d3e01572462c11be4133d63744486731d8748f955897be1639766de1bb639270"
+      },
+      {
+        "path": "lib/types/client/index.d.ts.map",
+        "sha256": "cf49121c25e804be066173e1a76b66f6a33c3d62101a0c38163acb2652afd724"
+      },
+      {
+        "path": "lib/types/client/locales.d.ts",
+        "sha256": "a0cb9a302d3b6b88eb460cd7c3d9db67440f7947a21961f7eab57d936561dc7c"
+      },
+      {
+        "path": "lib/types/client/locales.d.ts.map",
+        "sha256": "7c55235ff41608c6774b46edbbaf3c89d54e3d930ab55cc6ec4dcca796579390"
+      },
+      {
+        "path": "lib/types/client/model-select-styles.d.ts",
+        "sha256": "dbf38d617e41666e5305eb6ca9c60879cfa5ed5bcae30b31f9831ef3b1adf73a"
+      },
+      {
+        "path": "lib/types/client/model-select-styles.d.ts.map",
+        "sha256": "9b20a8f89473ceedc3d9a3b769d8076ec5ffbcf6421d385ca0de7b618e06889c"
+      },
+      {
+        "path": "lib/types/client/model-state.d.ts",
+        "sha256": "c1e08c2b962ee02d1482f00702c86a75db6c129f0f76cdc907c9bbe41e0eafef"
+      },
+      {
+        "path": "lib/types/client/model-state.d.ts.map",
+        "sha256": "8bd9f444b6a4eb1dfcd5804d87bc4440895fb55f49f3af3de59330e4ccc311b1"
+      },
+      {
+        "path": "lib/types/client/preferences.d.ts",
+        "sha256": "898b6879663f4823f44ad60654528642b520d4b6471ae6b0427ce69fd192e0b0"
+      },
+      {
+        "path": "lib/types/client/preferences.d.ts.map",
+        "sha256": "7118b2a0107b1dd72297f12918ae61a353000ee31f226a2ae76cf478dadf4587"
+      },
+      {
+        "path": "lib/types/client/provider-order.d.ts",
+        "sha256": "c402cde2aa5e78a3c497df6a359d77e5757001bcc6eeabfd1fd6df9be27ea3f1"
+      },
+      {
+        "path": "lib/types/client/provider-order.d.ts.map",
+        "sha256": "63e1bab0560f8c9fb26f366ad0d9d0ccbf609acaa81713c01a058464dbe3f313"
+      },
+      {
+        "path": "lib/types/client/SettingsSection.d.ts",
+        "sha256": "394c10d39ea87338c368f3486c9d189952d554f78942bed8bf1a1e2a426c127f"
+      },
+      {
+        "path": "lib/types/client/SettingsSection.d.ts.map",
+        "sha256": "b9f9399501de7e2c02850f60d66b16f1cfa5b7d15a836b11e292658437146221"
+      },
+      {
+        "path": "lib/types/client/styles.d.ts",
+        "sha256": "901e664686d6bf2dcd325f040adf212dfd4a447a5ddb269d5abbd1d1c5929a46"
+      },
+      {
+        "path": "lib/types/client/styles.d.ts.map",
+        "sha256": "9f246bd91c6b48f123a1163834c07a62a9fa8d5a914df9453ab2c7e7f647a40e"
+      },
+      {
+        "path": "lib/types/index.d.ts",
+        "sha256": "9886f710b8cf17faa153d0e92ba31307086d5885b907d593fdacc18df28f9b1d"
+      },
+      {
+        "path": "lib/types/index.d.ts.map",
+        "sha256": "cc8843361a239359824300a29f7723c7ba00c41c533578d23a66ab1ad0ad1c6a"
+      },
+      {
+        "path": "LICENSE",
+        "sha256": "b8848bbb9f42fa3172feaf1d6c2d2b6d3dce9925cb68f859f2f8db09961f69cd"
+      },
+      {
+        "path": "LICENSES/clsx-MIT.txt",
+        "sha256": "05e1ddd03fae661e6ef09579a77406fd4b56b642dd77ad65d680454d13e7f41e"
+      },
+      {
+        "path": "LICENSES/DeepSeek-Harness-MIT.txt",
+        "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
+      },
+      {
+        "path": "package.json",
+        "sha256": "73dc419465d4c275f531eb24d0b43d467637d4e5a312f3e52526c1268ab0478d"
+      },
+      {
+        "path": "README.md",
+        "sha256": "e5e1dfd13bc8f749fdc4802fb3125ae5d5b0177ff9f8544771ec8409b74f7a29"
+      },
+      {
+        "path": "THIRD_PARTY_NOTICES.md",
+        "sha256": "fccc45d61d1e5bf529beb0c8ed02f987e5605dd24f27c2f2906816ed971515d5"
+      }
+    ],
+    "originalPrivateBaselineArchiveSha256": "4efcc43d9688aa5ef16f5a292417a99712f435a8ab14c662a71a79917b9ce7c0",
+    "archiveReference": "Original private baseline archive digest only; that archive is not distributed. Public copies may redact historical documentation."
+  }
+]

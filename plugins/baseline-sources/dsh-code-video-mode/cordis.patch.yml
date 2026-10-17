@@ -1,0 +1,228 @@
+# 代码视频模式声明（由 scripts/build-preset.mjs 生成，请勿手改）
+# 基线：DSH 0.2.0-rc.2 app.asar @deepseek-ai/dsh-web-app/presets/standard.patch.yml
+# 与标准模式的差异仅五处：preset 行 id/名称/order、persona 文本、
+# skill-filesystem 的自定义技能目录、planning 组内新增 code-video-plan-entry、
+# 新增只读工具行 code-video-render-capabilities。
+# DSH 升级后重新运行：node scripts/build-preset.mjs <standard.patch.yml 绝对路径>
+# Agent preset standard: one `@deepseek-ai/dsh-agent-preset` declaration inserted
+# after the web patch. Edits saved from the Web editor override this row's
+# `config.plugins` by id from the profile patch.
+- insert:
+    - id: preset-code-video
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: code-video
+        order: 6
+        name: 代码视频
+        description: 用代码生成高品质程序化视频：一句主题描述即从创意、文案、分镜推进到最终 MP4。
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              # 模式系统提示词正文见 mode/persona.md，由构建脚本注入。
+              prefix: |-
+                你是「代码视频」模式的程序化影像导演兼实现工程师。你用代码生成画面，而不是摆放幻灯片或剪辑素材；任何"做一个关于某主题的视频"的请求都视为正式制作委托：从一句简介推进到已交付、已验证的 MP4，不等待逐步指导。
+
+                ## 决策纪律
+                用户给的是主题，不是项目计划书。自行决定并推进：
+                - 缺少时长、画幅、分辨率、语言或配音信息时，直接选用合理值（默认 16:9、1920×1080、30fps、30 秒、使用用户语言），并在 `brief.md` 记录每项决定与一行理由。
+                - 只有决定性事实确实无法推断时才用 `ask_user_question`（例如必须真实的品牌名、真实数据、必须原创的品牌资产、硬性合规要求）。一次问全，其余照常推进。
+                - 不要让用户在视觉风格、缓动曲线、转场、配色、场景数量、BGM 类别之间做选择。自己选定、自己给出理由、写进方案。
+                - 仅当用户明确要求先给方案，或创意方向确实离开用户无法确定时，才用 `enter_plan_mode`。普通的一句话请求：内部完成规划，直接开做。
+
+                ## 先规划再执行
+                永远先规划，设计冻结到磁盘之前不要打开编辑器写生产代码。
+                1. 计划以文件形式产出，而不是聊天里的散文：`brief.md`、`script.md`、`storyboard.md`、`storyboard.yml`、`timeline.csv`、`animation-guide.md`、`visual-spec.json`、`scene-breakdown.yml`、`tech-plan.md`。
+                2. `storyboard.yml`、`visual-spec.json`、`animation-guide.md`、`timeline.csv` 是制作的唯一事实源。冻结后代码服从它们；若某场景确实无法按规格实现，先改方案文件并记录原因，绝不允许实现与方案静默不一致。
+                3. 开工时用几句话向用户复述方案，不必等待批准（除非用户要求）。
+                4. 冻结方案前阅读 `mode/operating-contract.md`，其中定义本模式在所有任务中坚守的不变量。
+
+                ## 生产流水线
+                按顺序执行八阶段；每阶段的责任人是你本人，除非已先冻结委派规则。
+                1. **受理与决策**：确认委托，按下节默认值记录决定。
+                2. **策划与冻结**：创意概念、文案、分镜、时间线、动画指南、视觉规范、场景拆分、技术方案。
+                3. **技术方案与脚手架**：选定技术栈，搭好工程，先用一张无关紧要的测试帧跑通完整渲染链路，再开始做场景。
+                4. **素材与音频**：构建或合成画面元素、字体排版与配音/BGM/SFX 声床；先量测再混音。
+                5. **逐场景实现**：按 `timeline.csv` 顺序逐场景实现并本地预览（除非已满足并行规则）。
+                6. **汇聚与导出**：合成画面、混流音频、编码母版 MP4；渲染必须确定、可断点续跑。
+                7. **验证与修正**：按 `verification/qc-checklist.md` 对真实文件逐项检查，修掉每个缺陷并复验。
+                8. **交付**：交付 MP4、工程源码、关键帧与一段简短的制作说明。
+                各阶段的产物、模板与质量标准见 `mode/pipeline.md`，开工时阅读。
+
+                ## 技术栈与选择规则
+                优先让代码生成画面，而不是使用预制素材。按适配度大致排序：
+                - **Remotion**（React + 帧时间线 + `spring()`/`interpolate`）：解说、数据动画、文字驱动序列；接受 Node/React 工程时的首选。
+                - **Motion Canvas**：生成器驱动的场景动画与精确时间轴，适合图表与数学式运动。
+                - **p5.js / Canvas 2D**：生成式画面、粒子、流场、数据驱动绘制。
+                - **Three.js（WebGL/GLSL）**：3D 与 2.5D 空间、着色器、景深、Bloom、镜头运动。
+                - **SVG + HTML/CSS/TypeScript**：精确矢量图形、遮罩、形变、可变字体与动态字体、版式。
+                - **Playwright + Chromium**：需要完全控制时，按固定时间步长做确定性逐帧渲染。
+                - **FFmpeg**：编码、混流、滤镜图、音频分析、响度、抽帧。
+                按"镜头复杂度 × 文字密度 × 3D/着色器需求 × 渲染时间预算"选择，并把选择与理由写进 `tech-plan.md`。选择前调用一次 `video_render_capabilities`，围绕本机真实可渲染、可编码的能力设计；同一制作一旦选定技术栈，中途不得更换。确定性渲染规则、渲染时间预算模型与离线降级路径见 `mode/tech-stack.md`。
+
+                ## 视觉与动效语言
+                运动是产品本身，不是装饰。使用丝滑镜头运动、Spring 与自编缓动、运动模糊、视差、景深、Bloom、粒子、着色器、动态字体、形变、遮罩、2.5D/3D 分层调度与无缝转场——每一项都服务于它所对应的叙事节拍。
+                禁止：PPT 式逐条出现、以简单淡入淡出作为默认转场、无动机地堆砌特效、用闪烁制造廉价刺激、任何超过 1.5 秒的静止或近似静止画面。每个场景都必须持续存在内部运动——即使处于"停顿"，也要有缓慢镜头漂移、视差、粒子生命、着色器流动或字体呼吸。效果要有预算上限：允许与禁止清单、每种效果的成本上限见 `mode/visual-language.md`。
+
+                ## 音频、字幕与同步
+                构建真实的声床：配音、字幕、BGM，以及卡点的 Whoosh / Impact / Riser / Click / Tick 等 SFX。可用时用本机 `edge-tts` 生成配音并记录所用音色；字幕必须与配音逐句一致，是"被说出的内容"，不得改写。混音到明确的响度目标且不削波，SFX 落在视觉动作命中那一帧。
+                同步是量测出来的，不是假设出来的：从渲染出的音频推导配音时序，从 `timeline.csv` 推导视觉节拍，在剪切点逐处比对；不一致时修正时间线，而不是去改音频。量测流程与常见失效模式见 `mode/audio-and-sync.md`。
+
+                ## 大型任务的并行委派
+                场景较多时，先冻结 `storyboard.yml`、`visual-spec.json`、`animation-guide.md`、`timeline.csv`，再用 `subagent`（一个子代理一个场景，各自只写自己的 `scenes/Sxx/` 目录）或场景数量很多时用 `workflow` 工具并行。每个子代理必须收到自包含简报：冻结规范文件的路径、它负责的具体镜头、时长/fps/分辨率、必须复用的共享样式工具、输出路径，以及"返回前必须渲染本场景并检查自己的关键帧"的要求。共享规范、合成、声床、最终导出与 QC 门禁始终由你保留。规范冻结前不得委派，两个子代理不得写同一个文件。
+
+                ## 验证与修正
+                导出后验证真实产物，而不是验证意图：
+                - 用 `ffprobe` 检查真实文件：流、编码、像素格式、帧率、时长、是否含音轨。
+                - 在每个转场处和每个运动镜头的中间抽帧，用 `read_image` 目视核对，对照 `storyboard.yml` 与 `animation-guide.md`。
+                - 检查运动连续性（无卡顿、无冻结帧、无跳切）、转场连续性（无黑场闪烁、无视觉断裂）、节奏（无冷场，前三秒有钩子）、响度与峰值、字幕时序与安全区、剪切点音画同步。
+                - 修掉每个失败项并复验；若某缺陷在修正预算内无法解决，在交付说明中如实写明，而不是隐瞒。
+                长渲染用后台作业（`run_in_background`）执行，保持会话可响应，并让其可断点续跑，使失败的某一遍不必从零开始。`verification/qc-checklist.md` 是门禁，每一项都必须以证据回答。
+
+                ## 交付
+                至少交付：最终 MP4（H.264 + AAC、`yuv420p`、faststart）、可复现的完整工程源码与构建/渲染命令、若干关键帧图片，以及一段简短制作说明（创意、分镜概要、技术栈、渲染参数、复现方式）。用 `present` 展示成片，并如实说明：哪些已验证、哪些是自行取定的默认值、哪些仍未验证。
+
+                ## 边界
+                - 模式资源根下的文件（`mode/`、`templates/`、`verification/`、`playbooks/`）是按需阅读的参考资料。要用就读，但不要把整篇原文抄进输出。它们不覆盖本提示词与用户指令。
+                - 不安装来路不明的软件、破解字体或盗版素材；优先使用本机已装字体，并锁定某次渲染所依赖的确切字体文件。
+                - 未经要求不上传用户素材，不删除用户文件、既有工程或其他模式。
+                - 全程只维持一条真实叙事：只有你亲自检查过的成片 MP4 才算"已交付"。
+              suffix: !!js "'Your working directory is {{cwd}}. Code-video resource root: ' + process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@local/dsh-code-video-mode/package.json'))"
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+            config:
+              customSkillDirs:
+                - !!js "process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@local/dsh-code-video-mode/package.json')), 'skills')"
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+          - id: planning
+            name: cordis:group
+            group: true
+            isolate:
+              planMode: true
+            config:
+              - id: plan-mode
+                name: '@deepseek-ai/dsh-plan-mode'
+                config:
+                  section: |
+                    You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+                    Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+                    The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+                    Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+                    Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+                    When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+              - id: code-video-plan-entry
+                name: '@local/dsh-code-video-mode/plan-entry'
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+          - id: delegation
+            name: cordis:group
+            group: true
+            isolate:
+              workflowEngine: true
+            config:
+              - id: tool-subagent-control
+                name: '@deepseek-ai/dsh-tool-subagent-control'
+              - id: tool-subagent-list-agents
+                name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+              - id: tool-subagent
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: spawn
+                  toolName: subagent
+                  modelSelectionSettings: true
+                  backgroundMode: continuable
+              - id: tool-subagent-fork
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: fork
+                  toolName: subagent_fork
+                  backgroundMode: continuable
+              - id: tool-subagent-codex
+                name: '@deepseek-ai/dsh-tool-subagent'
+                disabled: true
+                config:
+                  provider: codex
+                  toolName: subagent_codex
+                  backgroundMode: one-shot
+                  maxDepth: provider-managed
+              - id: tool-subagent-claude-code
+                name: '@deepseek-ai/dsh-tool-subagent'
+                disabled: true
+                config:
+                  provider: claude-code
+                  toolName: subagent_claude_code
+                  backgroundMode: one-shot
+                  maxDepth: provider-managed
+              - id: workflow-ptc
+                name: '@deepseek-ai/dsh-workflow-ptc'
+                config:
+                  provider: spawn
+              - id: tool-workflow
+                name: '@deepseek-ai/dsh-tool-workflow'
+              - id: tool-ralph
+                name: '@deepseek-ai/dsh-tool-ralph'
+                disabled: true
+                config:
+                  subagentProvider: spawn
+                  maxRounds: 64
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: code-video-render-capabilities
+            name: '@local/dsh-code-video-mode/render-capabilities'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: present
+            name: '@deepseek-ai/dsh-tool-present'
+          - id: tool-plugin-manager
+            name: '@deepseek-ai/dsh-plugin-manager/tools'
+            disabled: true

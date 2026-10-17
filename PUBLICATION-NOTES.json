@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "docsOnlyRedaction": true,
+  "runtimeBytesUnchanged": true,
+  "changedFilePaths": [
+    "plugins/baseline-sources/dsh-code-video-mode/README.md",
+    "plugins/compatible-archives/local-dsh-code-video-mode-0.1.3+dsh.0.2.1-alpha.5.tgz!/package/README.md",
+    "updater/README.md"
+  ],
+  "immutablePrivateBaselineModified": false,
+  "compatibleArchivesRepacked": true,
+  "supplementalLicensePaths": [
+    "plugins/baseline-sources/dsh-adaptive-mode/LICENSE",
+    "plugins/baseline-sources/dsh-adaptive-mode/NOTICE",
+    "plugins/baseline-sources/dsh-code-video-mode/LICENSE",
+    "plugins/baseline-sources/dsh-code-video-mode/NOTICE"
+  ],
+  "compatibleArchiveAdditionalLicenseFiles": [
+    "package/LICENSE",
+    "package/NOTICE"
+  ],
+  "documentationImages": {
+    "originRepository": "https://github.com/ZoeHao2026/dsh-ui-model-selection-collapsible",
+    "alreadyPublicOriginalsConfirmedByPublishingOwner": true,
+    "existingAttributionAndLicenseNoticesPreserved": true,
+    "conceptArtworkIsOfficialBranding": false,
+    "scope": "Existing public documentation demo images. The AI-generated concept image is not official DeepSeek artwork.",
+    "files": [
+      {
+        "path": "plugins/baseline-sources/dsh-ui-model-selection-collapsible/docs/assets/model-selector-expanded.png",
+        "sourceUrl": "https://github.com/ZoeHao2026/dsh-ui-model-selection-collapsible/blob/main/docs/assets/model-selector-expanded.png",
+        "gitBlobSha1": "d397229b5fcb805b895db7f231447fa5ee540db6"
+      },
+      {
+        "path": "plugins/baseline-sources/dsh-ui-model-selection-collapsible/docs/assets/model-selector-hero-ai.png",
+        "sourceUrl": "https://github.com/ZoeHao2026/dsh-ui-model-selection-collapsible/blob/main/docs/assets/model-selector-hero-ai.png",
+        "gitBlobSha1": "4d946c380257fe641fd310bc52f2c55bd9be59b7"
+      },
+      {
+        "path": "plugins/baseline-sources/dsh-ui-model-selection-collapsible/docs/assets/model-selector-settings.jpg",
+        "sourceUrl": "https://github.com/ZoeHao2026/dsh-ui-model-selection-collapsible/blob/main/docs/assets/model-selector-settings.jpg",
+        "gitBlobSha1": "00ce9bba25b76e393f5949b432cf0423990f02fe"
+      }
+    ]
+  },
+  "originalArchiveDigestMeaning": "Original private baseline reference, not the redacted public archive. Public compatible archives have their own current digests.",
+  "testFixtureSourcesIncluded": [
+    "baseline-compatibility.mjs",
+    "baseline-compatibility.test.mjs",
+    "baseline-history.cjs",
+    "data-probe.mjs",
+    "deploy-updater.mjs",
+    "deploy-updater.test.mjs",
+    "inspect-build-cache.ps1",
+    "inspect-link.ps1",
+    "inspect-processes.ps1",
+    "installation-metadata.ps1",
+    "README.md",
+    "recovery-integration.mjs",
+    "test-data-probe.mjs",
+    "test-short-pnpm-build.mjs",
+    "upgrade-worker.mjs",
+    "upgrade-worker.test.mjs",
+    "tests/compile-recovery-fixture.ps1",
+    "tests/RecoveryFixture.cs"
+  ],
+  "excluded": [
+    "Local evidence and test results",
+    "Installed configuration",
+    "Credentials and environment files",
+    "User sessions and attachments",
+    "Update transactions and backups",
+    "Node and package-manager tool binaries"
+  ],
+  "publicTestAdaptations": [
+    "Deployment tests resolve repository-relative public plugin pins and create isolated fake tool manifests.",
+    "Recovery integration requires three explicit absolute fixture arguments and an owned physical sandbox; it never discovers a live updater configuration.",
+    "The optional short-path pnpm fixture requires an explicit source checkout before creating temporary data.",
+    "Only test fixtures and documentation were adapted; the production helper modules are unchanged."
+  ],
+  "publicStandaloneVerification": {
+    "platform": "Windows x64",
+    "nodeMajor": 24,
+    "tests": 26,
+    "passed": 26,
+    "failed": 0,
+    "networkRequired": false,
+    "realClientOrConfigurationRequired": false
+  },
+  "runtimeComparisonScope": "Original packaged plugin runtime files; documented README redaction and additional licenses are separate.",
+  "publicPluginToolAdaptations": [
+    "The compatibility probe requires an explicit official source checkout and supports both deployed packages and repository baseline-sources.",
+    "The declaration checker requires an explicit built official checkout and resolves all 11 public plugin sources and their dependencies without a sibling checkout assumption."
+  ],
+  "publicPluginToolVerification": {
+    "targetVersion": "0.2.1-alpha.5",
+    "targetCommit": "1517a4dbca0a2789ff1d41ba439600f8547d23fa",
+    "compatibilityProbePassed": true,
+    "compatiblePackages": 3,
+    "declarationCheckPassed": true,
+    "pluginSourceFiles": 11
+  }
+}

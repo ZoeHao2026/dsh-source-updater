@@ -1,0 +1,16 @@
+{
+  "destination": "C:/Users/YOURNAME/Documents/DSHUpdater",
+  "buildCacheDir": "C:/Users/YOURNAME/Documents/DSHB",
+  "sourceRepository": "C:/DSH/src",
+  "pluginAssets": "C:/DSH/dsh-source-updater/plugins",
+  "compatibilityPatch": "C:/DSH/dsh-source-updater/patches/source-compatibility.patch",
+  "nodeExecutable": "C:/Program Files/nodejs/node.exe",
+  "pnpmDirectory": "C:/DSH/tools/node_modules/pnpm",
+  "npmDirectory": "C:/Program Files/nodejs/node_modules/npm",
+  "gitExecutable": "C:/Program Files/Git/cmd/git.exe",
+  "powershellExecutable": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+  "installDir": "C:/Users/YOURNAME/AppData/Local/Programs/DeepSeek Harness",
+  "userDataDir": "C:/Users/YOURNAME/AppData/Roaming/@deepseek-ai/dsh-desktop",
+  "sharedDataDir": "C:/Users/YOURNAME/.dsh",
+  "currentVersion": "0.2.1-alpha.5"
+}

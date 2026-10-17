@@ -1,0 +1,1574 @@
+diff --git a/apps/desktop-host/src/index.ts b/apps/desktop-host/src/index.ts
+index 3086755b0bf5da567f01531cef2093ee597c2fbb..c7be1bc02381bb0399a303f7b190f2c8b5472b87 100644
+--- a/apps/desktop-host/src/index.ts
++++ b/apps/desktop-host/src/index.ts
+@@ -14,6 +14,7 @@ import { installDesktopUpdateTaskControl } from './update-tasks.ts'
+ import { installDesktopQuitInspection } from './quit-inspection.ts'
+ import { installPlatformSessionPublisher } from './platform-session.ts'
+ import { installOfficeEngineResolution } from './office-engine.ts'
++import { disableDesktopSourceHealthSchedules, requireDesktopSourceHealthPlugins } from './source-update-health.ts'
+ 
+ async function main(): Promise<void> {
+   const runtimeDir = process.argv[2] as string
+@@ -21,6 +22,10 @@ async function main(): Promise<void> {
+   installOfficeEngineResolution(runtimeDir)
+   const installAnchor = join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
+   const profile = loadProfileDirectory('dsh', projectDir, installAnchor)
++  if (process.env.DSH_SOURCE_UPDATE_HEALTH === '1') {
++    if (profile.skippedBundles.length > 0) throw new Error(`source health: profile skipped plugins: ${profile.skippedBundles.map(bundle => bundle.packageName).join(', ')}`)
++    disableDesktopSourceHealthSchedules(profile)
++  }
+   reportSkippedBundles('dsh', profile)
+   const application = runProfile({
+     environment: loadLayeredEnv('dsh'),
+@@ -90,6 +95,14 @@ async function main(): Promise<void> {
+   })
+   process.once('disconnect', () => { void stop() })
+   const { ctx } = await application
++  if (process.env.DSH_SOURCE_UPDATE_HEALTH === '1') {
++    const names: unknown = JSON.parse(process.env.DSH_SOURCE_UPDATE_HEALTH_PLUGINS ?? 'null')
++    if (!Array.isArray(names) || names.length === 0 || names.some(name => typeof name !== 'string')) throw new Error('source health: plugin inventory unavailable')
++    await ctx.loader.await()
++    requireDesktopSourceHealthPlugins(profile, names as string[], [...ctx.loader.entries()].map(entry => ({
++      id: entry.options.id, name: entry.options.name, disabled: entry.disabled, state: entry.fiber?.state,
++    })))
++  }
+   control.updateTasks = installDesktopUpdateTaskControl(ctx)
+   control.quitInspection = installDesktopQuitInspection(ctx)
+   await ctx.plugin(desktopOffice, {
+diff --git a/apps/desktop-host/src/source-update-health.ts b/apps/desktop-host/src/source-update-health.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5d08480b46add6f937250d2171205ed3631d0b5a
+--- /dev/null
++++ b/apps/desktop-host/src/source-update-health.ts
+@@ -0,0 +1,59 @@
++/** Prevent copied schedules and optional background launches during source-build qualification. */
++
++import type { Profile } from '@deepseek-ai/dsh-app-boot'
++import { FiberState } from '@deepseek-ai/cordis'
++
++/** Loader facts measured after startup, without activating saved sessions. */
++export interface DesktopSourceHealthEntry {
++  readonly id: string
++  readonly name: string
++  readonly disabled: boolean
++  readonly state: FiberState | undefined
++}
++
++/**
++ * Require selected external bundles and each of their inserted Host rows to be active.
++ * @param profile - The exact profile that booted in isolation.
++ * @param expected - Required bundle package names from the worker's pinned plugin inventory.
++ * @param entries - Actual Loader entries after startup.
++ */
++export function requireDesktopSourceHealthPlugins(
++  profile: Profile, expected: readonly string[], entries: readonly DesktopSourceHealthEntry[],
++): void {
++  if (profile.skippedBundles.length > 0) throw new Error('source health: plugins were skipped')
++  for (const name of expected) {
++    const layer = profile.layers.find(item => item.packageName === name)
++    if (layer === undefined) throw new Error(`source health: bundle not selected: ${name}`)
++    const rows = layer.patches.flatMap(patch => patch.insert ?? [])
++    if (rows.length === 0) throw new Error(`source health: bundle has no verifiable Host rows: ${name}`)
++    for (const row of rows) {
++      const entry = entries.find(item => item.id === row.id && item.name === row.name)
++      if (entry === undefined || entry.disabled || entry.state !== FiberState.ACTIVE) {
++        throw new Error(`source health: plugin not active: ${name} (${row.id})`)
++      }
++    }
++  }
++}
++
++/**
++ * Disable every scheduling row before the profile mounts any plugin.
++ * @param profile - Isolated profile loaded for source-build qualification.
++ * @returns Number of scheduler row ids explicitly disabled.
++ */
++export function disableDesktopSourceHealthSchedules(profile: Profile): number {
++  const ids = new Set<string>(['schedule'])
++  const visit = (value: unknown): void => {
++    if (Array.isArray(value)) { for (const item of value) visit(item); return }
++    if (typeof value !== 'object' || value === null) return
++    const record = value as Record<string, unknown>
++    if (record.name === '@deepseek-ai/dsh-schedule') {
++      if (typeof record.id !== 'string' || record.id === '') throw new Error('source health: scheduler has no stable row id')
++      ids.add(record.id)
++    }
++    for (const child of Object.values(record)) visit(child)
++  }
++  for (const layer of profile.layers) visit(layer.patches)
++  visit(profile.patches)
++  for (const id of ids) profile.patches.push({ id, disabled: true })
++  return ids.size
++}
+diff --git a/apps/desktop-host/tests/source-update-health.spec.ts b/apps/desktop-host/tests/source-update-health.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6927708b210075cb5e061c454bf419940c4cba9b
+--- /dev/null
++++ b/apps/desktop-host/tests/source-update-health.spec.ts
+@@ -0,0 +1,38 @@
++import { describe, expect, it } from 'vitest'
++import type { Profile } from '@deepseek-ai/dsh-app-boot'
++import { FiberState } from '@deepseek-ai/cordis'
++import { disableDesktopSourceHealthSchedules, requireDesktopSourceHealthPlugins } from '../src/source-update-health.ts'
++
++function profile(): Profile {
++  return { name: 'desktop', dir: '/snapshot/desktop', patchPath: '/snapshot/desktop/cordis.patch.yml', skippedBundles: [],
++    patches: [{ insert: [{ id: 'renamed-schedule', name: '@deepseek-ai/dsh-schedule' }] }],
++    layers: [{ packageName: 'test', packageDir: '/snapshot/test', patchPaths: [], patches: [{ insert: [{ id: 'schedule', name: '@deepseek-ai/dsh-schedule' }] }] }] }
++}
++
++describe('isolated source health', () => {
++  it('disables built-in and custom scheduling rows before any plugin loads', () => {
++    const value = profile()
++    expect(disableDesktopSourceHealthSchedules(value)).toBe(2)
++    expect(value.patches.slice(-2)).toEqual([{ id: 'schedule', disabled: true }, { id: 'renamed-schedule', disabled: true }])
++    expect(value.layers[0]!.patches).toHaveLength(1)
++  })
++
++  it('refuses to qualify a scheduler without a stable row id', () => {
++    const value = profile()
++    // @ts-expect-error Exercise malformed persisted input without a row id.
++    value.patches.push({ insert: [{ name: '@deepseek-ai/dsh-schedule' }] })
++    expect(() => disableDesktopSourceHealthSchedules(value)).toThrow('no stable row id')
++  })
++
++  it('requires the actual selected plugin Host row to reach active state', () => {
++    const value = profile()
++    const entry = { id: 'schedule', name: '@deepseek-ai/dsh-schedule', disabled: false, state: FiberState.ACTIVE }
++    expect(() =>{  requireDesktopSourceHealthPlugins(value, ['test'], [entry]) }).not.toThrow()
++    expect(() =>{  requireDesktopSourceHealthPlugins(value, ['test'], [{ ...entry, state: FiberState.FAILED }]) }).toThrow('plugin not active')
++    expect(() =>{  requireDesktopSourceHealthPlugins(value, ['test'], [{ ...entry, state: FiberState.PENDING }]) }).toThrow('plugin not active')
++    expect(() =>{  requireDesktopSourceHealthPlugins(value, ['test'], []) }).toThrow('plugin not active')
++    expect(() =>{  requireDesktopSourceHealthPlugins(value, ['absent'], [entry]) }).toThrow('bundle not selected')
++    value.skippedBundles.push({ packageName: 'broken', reason: 'missing dependency' })
++    expect(() =>{  requireDesktopSourceHealthPlugins(value, ['test'], [entry]) }).toThrow('plugins were skipped')
++  })
++})
+diff --git a/apps/desktop/README.i18n.yaml b/apps/desktop/README.i18n.yaml
+index 6060f79da9559469cbb2f346d124c257e10796df..4baa3f1adaa4a31ab322709130d32fdfe4748466 100644
+--- a/apps/desktop/README.i18n.yaml
++++ b/apps/desktop/README.i18n.yaml
+@@ -59,6 +59,9 @@
+ /deepseek-harness-desktop/updates:
+   en: 4788b6b60489ef92
+   zh: 6312c5590efa27f1
++/deepseek-harness-desktop/updates/local-source-updates:
++  en: 813f77e02fcfe62e
++  zh: 1f5099f1cbb1d16f
+ /deepseek-harness-desktop/updates/local-desktop-settings:
+   en: 2e57457c44c85b5f
+   zh: 5b8510a3dc4c6c9d
+diff --git a/apps/desktop/README.md b/apps/desktop/README.md
+index e0bb92c5b788190d7ae04eb986c1087f7700b378..41cdb9230b8acf70ec4a2b5c46686b782a7efd63 100644
+--- a/apps/desktop/README.md
++++ b/apps/desktop/README.md
+@@ -281,6 +281,14 @@ Confirmed Host exit without successful task teardown displays localized recovery
+ 
+ <a id="local-desktop-settings"></a>
+ 
++### Local source updates
++
++Local builds carrying `dshSourceUpdater: true` use the installed `%LOCALAPPDATA%/DSH Source Updater/updater-config.json` helper configuration. The helper runs under an independent Node executable outside the application installation. Cold and second launches check published official `dsh-v*` releases, including prereleases; concurrent launches share one build and no periodic release polling runs.
++
++The helper builds a fixed release commit with the saved source patch and plugin compatibility checks. An incompatible patch or plugin retains the current installation and opens a warning. The application menu's Source Update Status command displays the current result and offers Retry. Missing helper files leave ordinary application startup available.
++
++Installation requires saved drafts, sixty seconds without application input, and no running tasks, approval waits, queued messages or background jobs. The Host drains admitted requests and stops gracefully before the helper snapshots the application, Harness home and Electron data. Qualification runs against isolated data with schedules and user admission disabled; matching program and data snapshots remain available for rollback. Packaged mandatory-update policy remains active independently of this local source-update path.
++
+ ### Local desktop settings
+ 
+ The [shell configuration decision](../../.agents/notes/implemented/architecture/2026-10-08-desktop-shell-configuration.md) defines Host-independent ownership and the criteria for evaluating existing settings for migration.
+diff --git a/apps/desktop/README.zh.md b/apps/desktop/README.zh.md
+index 430ac4ad3d02a32c77d95aa92b8367d6c59eeea1..cf10314f3e38ceb66dbcca4b38b12558c1fa0788 100644
+--- a/apps/desktop/README.zh.md
++++ b/apps/desktop/README.zh.md
+@@ -281,6 +281,14 @@ Windows 下载完成后的更新确认说明应用会在安装期间关闭、完
+ 
+ <a id="local-desktop-settings"></a>
+ 
++### 本地源码更新
++
++带有 `dshSourceUpdater: true` 标记的本地构建使用已安装的 `%LOCALAPPDATA%/DSH Source Updater/updater-config.json` 助手配置。助手通过应用安装目录外的独立 Node 可执行文件运行。冷启动和再次启动时检查官方已发布的 `dsh-v*` 版本，包括预发布版本；并发启动共享同一次构建，不定期轮询新版本。
++
++助手以固定发布提交、保存的源码补丁和插件兼容检查构建客户端。补丁或插件不兼容时保留当前安装并显示提示。应用菜单的“源码更新状态”显示当前结果并提供重试入口。助手文件缺失时，应用仍可正常启动。
++
++安装要求草稿已保存、应用连续六十秒无输入，且没有运行任务、待审批、排队消息或后台作业。Host 排空已接收请求并正常停止后，助手备份应用、Harness 数据目录和 Electron 数据。验证使用隔离数据并关闭调度及用户请求入口；保留相互匹配的程序和数据快照用于回退。打包的强制更新策略独立于本地源码更新流程继续生效。
++
+ ### 本地桌面设置
+ 
+ [壳层配置决策](../../.agents/notes/implemented/architecture/2026-10-08-desktop-shell-configuration.zh.md)说明独立于 Host 的配置归属，以及评估现有设置迁移的标准。
+diff --git a/apps/desktop/scripts/electron-builder-config.mjs b/apps/desktop/scripts/electron-builder-config.mjs
+index 4b9cd27a8d5c1eee9219cfc9ca8b60b1c2562deb..3d490e87690b64016310cfd2b366c2508f7ff1ac 100644
+--- a/apps/desktop/scripts/electron-builder-config.mjs
++++ b/apps/desktop/scripts/electron-builder-config.mjs
+@@ -107,6 +107,7 @@ export function createElectronBuilderConfig(
+     appId,
+     protocols: [{ name: 'DeepSeek Harness', schemes: ['dsh'] }],
+     extraMetadata: {
++      dshSourceUpdater: true,
+       dshDesktopAppId: appId,
+       dshDesktopUpdateChannel: update?.channel ?? 'nightly',
+       ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),
+diff --git a/apps/desktop/scripts/smoke-packaged-runtime.ts b/apps/desktop/scripts/smoke-packaged-runtime.ts
+index 6c3c12c8572593a1f038ed39f4ff3da898cecf70..8e849ace1a648880e6a8e29732df7f0a4c49ef98 100644
+--- a/apps/desktop/scripts/smoke-packaged-runtime.ts
++++ b/apps/desktop/scripts/smoke-packaged-runtime.ts
+@@ -1,5 +1,7 @@
+ /** Validate the assembled application, including native Office conversion outside ASAR. */
+-import { join } from 'node:path'
++import { basename, dirname, join, resolve } from 'node:path'
++import { cp, mkdtemp, rm } from 'node:fs/promises'
++import { tmpdir } from 'node:os'
+ import { parseArgs } from 'node:util'
+ import { desktopArtifactOutput, resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
+ import { readDesktopRuntime, verifyDesktopRuntime } from '../src/runtime-tree.ts'
+@@ -12,11 +14,29 @@ const { values } = parseArgs({ options: { unsigned: { type: 'boolean', default:
+ const target = resolveDesktopBuildTarget()
+ const windows = target === 'win-x64'
+ const artifacts = desktopArtifactOutput(paths, { unsigned: values.unsigned, skipNotarization: values['skip-notarization'] }).directory
+-const application = windows ? join(artifacts, 'win-unpacked')
++let application = windows ? join(artifacts, 'win-unpacked')
+   : join(artifacts, target === 'mac-arm64' ? 'mac-arm64' : 'mac', 'DeepSeek Harness.app', 'Contents')
++let qualificationRoot: string | undefined
++// CPython's native extension loader still hits MAX_PATH in deeply nested build trees.
++// Keep the assembled bytes intact and exercise them from a short disposable copy,
++// matching the installed path length without changing Windows system settings.
++if (windows && application.length > 140) {
++  qualificationRoot = await mkdtemp(join(tmpdir(), 'dsh-packed-'))
++  const shortApplication = join(qualificationRoot, 'app')
++  await cp(application, shortApplication, { recursive: true, dereference: false, errorOnExist: true, force: false })
++  application = shortApplication
++  console.info(`desktop runtime: short-path qualification copy ${application}`)
++}
+ const resources = join(application, windows ? 'resources' : 'Resources')
+ const executable = windows ? join(application, 'DeepSeek Harness.exe') : join(application, 'MacOS', 'DeepSeek Harness')
+ const descriptor = await verifyDesktopRuntime(paths.dsh, readDesktopRuntime(paths.dsh).release.version,
+   resolveDesktopPackageTarget(target))
+ if (windows && !values.unsigned) await verifyWindowsCode(application)
+ await smokePreparedRuntime(join(resources, 'app.asar', 'dsh'), executable, join(resources, 'runtime'), descriptor)
++if (qualificationRoot !== undefined) {
++  const absolute = resolve(qualificationRoot)
++  if (dirname(absolute) !== resolve(tmpdir()) || !/^dsh-packed-[a-zA-Z0-9]+$/u.test(basename(absolute))) {
++    throw new Error('desktop runtime: refusing cleanup outside the qualification copy')
++  }
++  await rm(absolute, { recursive: true })
++}
+diff --git a/apps/desktop/scripts/test-host-updates.ts b/apps/desktop/scripts/test-host-updates.ts
+index ba0a63b8f6d8977c4c4c45d0f233b5b3ddceda76..940edfa056d80f5533b97cb49e5eff872c8b4728 100644
+--- a/apps/desktop/scripts/test-host-updates.ts
++++ b/apps/desktop/scripts/test-host-updates.ts
+@@ -27,6 +27,9 @@ try {
+     { id: 'llm-deepseek', disabled: true },
+     { id: 'session-title-llm', disabled: true },
+     { id: 'session-telemetry-otel', disabled: true },
++    { id: 'desktop-product-telemetry', disabled: true },
++    { id: 'product-analytics', disabled: true },
++    { id: 'schedule', disabled: true },
+     { id: 'agent-instructions', disabled: true },
+     { id: 'agent-preset-registry', config: { default: 'standard' } },
+     { insert: [{ id: 'update-qualification', name: new URL('../tests/fixtures/host-update-control.mjs', import.meta.url).href }] },
+diff --git a/apps/desktop/src/ipc.ts b/apps/desktop/src/ipc.ts
+index fc19021fa6047bf5ef2a1c5e65c510adda71ee08..8cff66803f7dad5b8438cea03c3bc2731336dd3c 100644
+--- a/apps/desktop/src/ipc.ts
++++ b/apps/desktop/src/ipc.ts
+@@ -31,6 +31,7 @@ export const DESKTOP_IPC = {
+   windowFullscreen: 'dsh-desktop:window-fullscreen',
+   windowsAppearance: 'dsh-desktop:windows-appearance',
+   windowsMenu: 'dsh-desktop:windows-menu',
++  sourceUpdateActivity: 'dsh-desktop:source-update-activity',
+ } as const
+ 
+ /** Desktop release update state rendered by desktop-owned UI. */
+diff --git a/apps/desktop/src/locale.ts b/apps/desktop/src/locale.ts
+index 5d9d4607c7d046006cb91d0ef41e5f7ba193b435..049a39399bd753cf1bd02dbac07f9a07d43c0cab 100644
+--- a/apps/desktop/src/locale.ts
++++ b/apps/desktop/src/locale.ts
+@@ -1,6 +1,11 @@
+ /** Typed English and Chinese copy owned by the Electron shell. */
+ 
+ export const en = {
++  sourceUpdateTitle: 'Source Build Updates…',
++  sourceUpdateStatus: 'Local source update status',
++  sourceUpdateBuild: 'Unsigned source build. Published alpha, beta, rc and stable releases are checked each time you open the app.',
++  sourceUpdateRetry: 'Retry update check',
++  sourceUpdateBlocked: 'The source update is blocked. Your current version remains available.',
+   cliCommandMenu: 'Manage dsh Command…',
+   cliCommandTitle: 'Manage dsh Command',
+   cliCommandLocation: 'Desktop command: {path}',
+@@ -172,6 +177,11 @@ export const en = {
+ export type DesktopMessages = { readonly [Key in keyof typeof en]: string }
+ 
+ export const zh = {
++  sourceUpdateTitle: '源码构建更新…',
++  sourceUpdateStatus: '本地源码更新状态',
++  sourceUpdateBuild: '本地未签名源码构建。每次打开应用时检查已发布的 alpha、beta、rc 和正式版本。',
++  sourceUpdateRetry: '重试更新检查',
++  sourceUpdateBlocked: '源码更新暂时无法继续，当前版本仍可正常使用。',
+   cliCommandMenu: '管理 dsh 命令…',
+   cliCommandTitle: '管理 dsh 命令',
+   cliCommandLocation: 'Desktop 命令：{path}',
+diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
+index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c50b56f1b 100644
+--- a/apps/desktop/src/main.ts
++++ b/apps/desktop/src/main.ts
+@@ -3,7 +3,7 @@ import { WINDOWS_TITLEBAR_HEIGHT } from './windows-layout.ts'
+ /** Electron shell: desktop project ownership, custom protocol, windows, and lifecycle. */
+ 
+ import { readFile, writeFile } from 'node:fs/promises'
+-import { join } from 'node:path'
++import { dirname, join } from 'node:path'
+ import { fileURLToPath } from 'node:url'
+ import {
+   app,
+@@ -61,6 +61,15 @@ import { DesktopUpdateOverlays } from './update-overlay.ts'
+ import { DesktopQuitConfirmation } from './quit-confirmation.ts'
+ import { DesktopTray } from './tray.ts'
+ import { DesktopBackgroundNotice } from './background-notice.ts'
++import { DesktopSourceUpdater, desktopSourceUpdaterPaths, runDesktopSourceWorker } from './source-updater.ts'
++import { readDesktopSourceHealthRequest, desktopSourceHealthPluginVersions, awaitDesktopSourceHealthRelease } from './source-update-health.ts'
++
++const sourceHealth = readDesktopSourceHealthRequest(process.argv)
++if (sourceHealth !== undefined) {
++  process.env.DSH_HOME = sourceHealth.homePath
++  process.env.DSH_SOURCE_UPDATE_HEALTH = '1'
++  app.setPath('userData', sourceHealth.userDataPath)
++}
+ 
+ let focusPrimaryWindow = (): void => {}
+ let stopForRecovery = async (): Promise<void> => {}
+@@ -586,6 +595,108 @@ async function main(): Promise<void> {
+ 
+   const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
+   const updateChannel = desktopUpdateChannel(manifest)
++  const sourcePaths = process.platform === 'win32' && typeof manifest === 'object' && manifest !== null
++    && 'dshSourceUpdater' in manifest && manifest.dshSourceUpdater === true
++    ? desktopSourceUpdaterPaths(app.isPackaged ? process.env.LOCALAPPDATA : undefined,
++      process.env.DSH_SOURCE_UPDATER_CONFIG, app.getPath('documents'))
++    : undefined
++  let lastSourceInput = Date.now()
++  let sourceInputBlocked = false
++  let sourceDraftPersistenceFailed = false
++  let sourceRendererSeen = false
++  let sourceUpdater: DesktopSourceUpdater | undefined
++  const sourceLaunch = (): void => {
++    lastSourceInput = Date.now()
++    void sourceUpdater?.launch()
++  }
++  const sourceIdleMilliseconds = (): number => Date.now() - lastSourceInput
++  const sourcePolicyPending = (): boolean => isMandatory() || mandatoryPolicy?.state.checking === true
++  const sourceDraftsSaved = (): boolean => !sourceDraftPersistenceFailed
++  const recoverSourceInstall = async (): Promise<void> => {
++    sourceInputBlocked = false
++    shellInstallerOwnsQuit = false
++    requireCleanStop = false
++    updateStoppedHost = false
++    if (quitting) return
++    await backend.start(prepareHostEnvironment)
++    navigation = undefined
++    await navigateMain(applicationUrl)
++  }
++  if (sourcePaths !== undefined) {
++    sourceUpdater = new DesktopSourceUpdater({
++      request: { schemaVersion: 1, currentVersion: app.getVersion(), appPid: process.pid,
++        installDir: dirname(process.execPath), userDataDir: app.getPath('userData'), sharedDataDir: dirname(dirname(paths.profile)) },
++      run: (action, request, detached) => runDesktopSourceWorker(resources.node, sourcePaths, action, request, detached),
++      idleMilliseconds: sourceIdleMilliseconds,
++      prepareInstall: async () => {
++        if (quitting || recovery.active || sourcePolicyPending()
++          || updateDialog.isOpen || !sourceDraftsSaved() || !sourceRendererSeen
++          || sourceIdleMilliseconds() < 60_000 || startup !== undefined || workspaceRecovery !== undefined) return false
++        const host = backend.host
++        if (host === undefined || mainWindow === undefined || mainWindow.isDestroyed()) return false
++        await commandManager.idle()
++        if (await host.updateTasks('inspect')) return false
++        sourceInputBlocked = true
++        try {
++          if (sourceIdleMilliseconds() < 60_000 || backend.host !== host || await host.updateTasks('lock')) {
++            await host.updateTasks('unlock')
++            sourceInputBlocked = false
++            return false
++          }
++          // Conversation drafts synchronously write localStorage on each edit. A write failure is latched below.
++          await mainWindow.webContents.executeJavaScript('localStorage.length', true)
++          session.defaultSession.flushStorageData()
++          if (!sourceDraftsSaved() || sourceIdleMilliseconds() < 60_000 || sourcePolicyPending()) {
++            await host.updateTasks('unlock')
++            sourceInputBlocked = false
++            return false
++          }
++          await platformView.closeAndWait()
++          requireCleanStop = true
++          updateStopFailure = undefined
++          await backend.stop()
++          updateStoppedHost = true
++          const failure = updateStopFailure as DesktopHostUncleanExitError | undefined
++          if (failure !== undefined) throw failure
++          if (sourcePolicyPending()) throw new Error('source updater: mandatory policy is pending or blocking')
++          return true
++        } catch (error) {
++          if (!updateStoppedHost) await host.updateTasks('unlock').catch((unlockError: unknown) => { console.error(unlockError) })
++          else await recoverSourceInstall()
++          sourceInputBlocked = false
++          throw error
++        } finally { requireCleanStop = false }
++      },
++      recoverInstall: recoverSourceInstall,
++      quit: () => { shellInstallerOwnsQuit = true; quitWithoutConfirmation() },
++      publish: (state) => {
++        console.info('desktop source update:', state.phase, state.detail ?? '')
++        if (state.phase === 'blocked') {
++          void ordinaryMessageBox({ type: 'warning', title: locale.messages.sourceUpdateTitle,
++            message: locale.messages.sourceUpdateBlocked, detail: state.detail ?? '',
++            buttons: [locale.messages.updateAcknowledge], cancelId: 0 }).catch((error: unknown) => { console.error(error) })
++        }
++      },
++    })
++    app.on('second-instance', sourceLaunch)
++    app.on('will-quit', () => { sourceUpdater?.dispose() })
++    ipcMain.on(DESKTOP_IPC.sourceUpdateActivity, (event) => {
++      if (event.sender !== mainWindow?.webContents) return
++      const url = event.senderFrame?.url
++      if (url === undefined || !url.startsWith(`${SCHEME}://app/`)) return
++      sourceRendererSeen = true
++      if (!sourceInputBlocked) lastSourceInput = Date.now()
++    })
++  }
++  const showSourceUpdateStatus = async (): Promise<void> => {
++    if (sourceUpdater === undefined) return
++    const state = sourceUpdater.state
++    const result = await ordinaryMessageBox({ type: 'info', title: locale.messages.sourceUpdateTitle,
++      message: locale.messages.sourceUpdateStatus,
++      detail: `${locale.messages.sourceUpdateBuild}\n${state.phase}${state.target === undefined ? '' : `: ${state.target.version}`}\n${state.detail ?? ''}`,
++      buttons: [locale.messages.sourceUpdateRetry, locale.messages.updateAcknowledge], cancelId: 1 })
++    if (result.response === 0) void sourceUpdater.launch()
++  }
+   const updates = new DesktopUpdateCoordinator(
+     publishUpdate,
+     async () => {
+@@ -800,6 +911,7 @@ async function main(): Promise<void> {
+   let promptOperation: Promise<void> | undefined
+   let policyAuthenticationQueued = false
+   const openUpdatePrompt = (manual = false): Promise<void> => {
++    if (sourceUpdater !== undefined) return showSourceUpdateStatus()
+     if (authenticationOperation !== undefined) {
+       policyAuth?.focus(); updateDialog.focus()
+     }
+@@ -920,6 +1032,7 @@ async function main(): Promise<void> {
+ 
+   const automaticCheck = (): void => {
+     if (!quitting) void mandatoryPolicy?.check('foreground-or-resume').catch((error: unknown) => { console.error(error) })
++    if (sourceUpdater !== undefined) return
+     if (!quitting) void updateSchedule.check().catch((error: unknown) => { console.error(error) })
+   }
+   powerMonitor.on('resume', automaticCheck)
+@@ -960,6 +1073,8 @@ async function main(): Promise<void> {
+       : { label: currentDesktopLocale().messages.aboutMenu, role: 'about' },
+     { type: 'separator' },
+     { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
++    ...sourceUpdater === undefined ? [] : [{ label: currentDesktopLocale().messages.sourceUpdateTitle,
++      click: () => { void showSourceUpdateStatus().catch((error: unknown) => { console.error(error) }) } }],
+     ...process.platform === 'darwin' || process.platform === 'win32'
+       ? [{ label: currentDesktopLocale().messages.cliCommandMenu, click: () => { void commandManager.show() } }] : [],
+     ...development ? [
+@@ -1075,6 +1190,20 @@ async function main(): Promise<void> {
+     browserGuests.bind(window, (guest, name) => shortcuts.attachGuest(window, guest, name))
+     shortcuts.attach(window)
+     window.on('focus', automaticCheck)
++    if (sourceUpdater !== undefined) {
++      window.webContents.on('did-start-navigation', (_event, _url, _inPlace, mainFrame) => { if (mainFrame) sourceRendererSeen = false })
++      window.webContents.prependListener('before-input-event', (event: Electron.Event) => {
++        if (sourceInputBlocked) event.preventDefault()
++        else lastSourceInput = Date.now()
++      })
++      window.webContents.prependListener('before-mouse-event', (event: Electron.Event) => {
++        if (sourceInputBlocked) event.preventDefault()
++        else lastSourceInput = Date.now()
++      })
++      window.webContents.on('console-message', (details) => {
++        if (/snapshot store .*persistence failed/iu.test(details.message)) sourceDraftPersistenceFailed = true
++      })
++    }
+     // Closing hides: the page and the Host keep running, and the next show resumes the same document.
+     window.on('close', (event) => {
+       if (quitting || shellInstallerOwnsQuit || sessionEnding) return
+@@ -1330,6 +1459,7 @@ async function main(): Promise<void> {
+     }).catch((error: unknown) => { console.error(error) })
+   }
+   automaticCheck()
++  sourceLaunch()
+   await reconcileBackend().catch(() => undefined)
+   // Window lifecycle callbacks run while backend startup is pending.
+   if (isQuitting()) return
+@@ -1342,9 +1472,35 @@ async function main(): Promise<void> {
+ 
+ const ownsDesktopInstance = claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
+ 
+-if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unknown) => {
++async function qualifySourceBuild(): Promise<void> {
++  if (sourceHealth === undefined) throw new Error('source health: missing request')
++  const resources = runtimeResources()
++  const paths = resolveDesktopPaths(sourceHealth.homePath)
++  const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
++  if (typeof manifest !== 'object' || manifest === null || !('dshBuildCommit' in manifest) || manifest.dshBuildCommit !== sourceHealth.commit
++    || !('dshDesktopAppId' in manifest) || manifest.dshDesktopAppId !== 'com.deepseek.dsh' || app.getVersion() !== sourceHealth.version) {
++    throw new Error('source health: application build identity differs from requested release')
++  }
++  const manager = new DesktopProjectManager(paths, resources)
++  await manager.applyRelease()
++  const host = new DesktopHostProcess(resources.node, resources.dsh, paths.profile, undefined,
++    { ...process.env, DSH_HOME: sourceHealth.homePath, DSH_SOURCE_UPDATE_HEALTH: '1', DSH_CLIENT_VERSION: desktopClientVersion(),
++      DSH_SOURCE_UPDATE_HEALTH_PLUGINS: JSON.stringify(sourceHealth.plugins.map(plugin => plugin.name)) },
++    (error) => { console.error(error); app.exit(1) }, join(process.resourcesPath, 'runtime', 'primary-runtime'), resources)
++  try {
++    await host.start()
++    if (await host.updateTasks('lock')) throw new Error('source health: isolated profile started work')
++    const pluginVersions = await desktopSourceHealthPluginVersions(paths.profile)
++    await awaitDesktopSourceHealthRelease(sourceHealth, { version: app.getVersion(), commit: manifest.dshBuildCommit,
++      appId: manifest.dshDesktopAppId, pluginVersions, profileLoaded: true, pluginsLoaded: true, schedulesDisabled: true })
++  } finally { await host.stop(true) }
++  app.exit(0)
++}
++
++if (ownsDesktopInstance) void app.whenReady().then(sourceHealth === undefined ? main : qualifySourceBuild).catch(async (error: unknown) => {
+   const message = error instanceof Error ? error.message : String(error)
+   console.error(error)
++  if (sourceHealth !== undefined) { app.exit(1); return }
+   const diagnosticFile = process.env.DSH_DESKTOP_DIAGNOSTIC_FILE
+   if (diagnosticFile !== undefined) {
+     await writeFile(diagnosticFile, `${error instanceof Error ? error.stack ?? message : message}\n`).catch(() => undefined)
+diff --git a/apps/desktop/src/preload-app.ts b/apps/desktop/src/preload-app.ts
+index f590b8bc8b80a6ee007a0f36249097c77fb0b974..d49447ada62b44645ce1269c0e9c95ff6a2d0836 100644
+--- a/apps/desktop/src/preload-app.ts
++++ b/apps/desktop/src/preload-app.ts
+@@ -59,6 +59,18 @@ function createProductApi(): DshDesktopProductApi {
+ }
+ 
+ if (location.protocol === `${SCHEME}:` && location.hostname === 'app') {
++  // Covers pointer, touch, paste, and composition activity as well as native key input.
++  let sourceActivitySent = 0
++  const sourceActivity = (): void => {
++    const now = Date.now()
++    if (now - sourceActivitySent < 250) return
++    sourceActivitySent = now
++    ipcRenderer.send(DESKTOP_IPC.sourceUpdateActivity)
++  }
++  for (const name of ['pointerdown', 'pointermove', 'keydown', 'input', 'paste', 'compositionstart', 'compositionend', 'wheel']) {
++    document.addEventListener(name, sourceActivity, { capture: true, passive: true })
++  }
++  document.addEventListener('DOMContentLoaded', sourceActivity, { once: true })
+   contextBridge.exposeInMainWorld('dshOnboarding', {
+     hasApiKey: () => ipcRenderer.invoke(DESKTOP_IPC.onboardingApiKey) as Promise<boolean>,
+     setActive: (active: boolean) => { ipcRenderer.send(DESKTOP_IPC.onboardingActive, active) },
+diff --git a/apps/desktop/src/source-update-health.ts b/apps/desktop/src/source-update-health.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..490d18ace4c766d201c174c5bcd6c729e07a4597
+--- /dev/null
++++ b/apps/desktop/src/source-update-health.ts
+@@ -0,0 +1,107 @@
++/** Isolated source-build qualification before normal windows, launch checks, or user request admission. */
++
++import { readFileSync } from 'node:fs'
++import { readFile, writeFile } from 'node:fs/promises'
++import { isAbsolute, join, resolve } from 'node:path'
++import { homedir } from 'node:os'
++import { desktopSourceUpdaterPaths } from './source-updater.ts'
++
++/** Worker-owned qualification request, passed only on the local process command line. */
++export interface DesktopSourceHealthRequest {
++  readonly schemaVersion: 1
++  readonly token: string
++  readonly receiptPath: string
++  readonly releasePath: string
++  readonly homePath: string
++  readonly userDataPath: string
++  readonly version: string
++  readonly commit: string
++  readonly phase: 'isolated' | 'installed' | 'installed-final'
++  readonly plugins: readonly { readonly name: string; readonly version: string }[]
++}
++
++/**
++ * Read a qualification request before Electron claims its normal profile.
++ * @param argv - Local process command line.
++ * @returns Validated request, or undefined for an ordinary launch.
++ */
++export function readDesktopSourceHealthRequest(argv: readonly string[]): DesktopSourceHealthRequest | undefined {
++  const argument = argv.find(value => value.startsWith('--source-update-health='))
++  if (argument === undefined) return undefined
++  const value: unknown = JSON.parse(readFileSync(argument.slice('--source-update-health='.length), 'utf8'))
++  if (typeof value !== 'object' || value === null) throw new Error('source health: invalid request')
++  const fields = value as Record<string, unknown>
++  if (fields.schemaVersion !== 1 || typeof fields.token !== 'string' || !/^[a-zA-Z0-9_-]{16,128}$/u.test(fields.token)
++    || typeof fields.version !== 'string' || typeof fields.commit !== 'string' || !/^[0-9a-f]{40}$/u.test(fields.commit)
++    || !['isolated', 'installed', 'installed-final'].includes(String(fields.phase))) throw new Error('source health: invalid request identity')
++  for (const key of ['receiptPath', 'releasePath', 'homePath', 'userDataPath']) {
++    if (typeof fields[key] !== 'string' || !isAbsolute(fields[key])) throw new Error(`source health: invalid ${key}`)
++  }
++  const request = value as DesktopSourceHealthRequest
++  if (!Array.isArray(fields.plugins) || fields.plugins.length === 0
++    || fields.plugins.some((plugin: unknown) => typeof plugin !== 'object' || plugin === null
++      || !('name' in plugin) || typeof plugin.name !== 'string'
++      || !('version' in plugin) || typeof plugin.version !== 'string')) throw new Error('source health: expected plugins missing')
++  const samePath = (left: string, right: string): boolean => process.platform === 'win32'
++    ? resolve(left).toLowerCase() === resolve(right).toLowerCase() : resolve(left) === resolve(right)
++  const updaterPaths = desktopSourceUpdaterPaths(process.env.LOCALAPPDATA, process.env.DSH_SOURCE_UPDATER_CONFIG, join(homedir(), 'Documents'))
++  const config: unknown = updaterPaths === undefined ? undefined : JSON.parse(readFileSync(updaterPaths.config, 'utf8')) as unknown
++  const configuredHome = typeof config === 'object' && config !== null && 'sharedDataDir' in config && typeof config.sharedDataDir === 'string' ? config.sharedDataDir : undefined
++  const configuredUserData = typeof config === 'object' && config !== null && 'userDataDir' in config && typeof config.userDataDir === 'string' ? config.userDataDir : undefined
++  if (request.phase === 'installed-final') {
++    if (configuredHome === undefined || configuredUserData === undefined || !samePath(configuredHome, request.homePath)
++      || !samePath(configuredUserData, request.userDataPath)) throw new Error('source health: final data paths differ from updater configuration')
++  } else if (samePath(request.homePath, join(process.env.USERPROFILE ?? '.', '.dsh'))
++    || samePath(request.userDataPath, join(process.env.APPDATA ?? '.', 'DeepSeek Harness'))
++    || samePath(request.userDataPath, join(process.env.APPDATA ?? '.', '@deepseek-ai', 'dsh-desktop'))
++    || (configuredHome !== undefined && samePath(configuredHome, request.homePath))
++    || (configuredUserData !== undefined && samePath(configuredUserData, request.userDataPath))) {
++    throw new Error('source health: qualification requires isolated data directories')
++  }
++  return request
++}
++
++/**
++ * Inspect installed plugin versions after profile startup.
++ * @param profile - Isolated Desktop profile.
++ * @returns Installed external package versions declared by this profile.
++ */
++export async function desktopSourceHealthPluginVersions(profile: string): Promise<Record<string, string>> {
++  const manifest: unknown = JSON.parse(await readFile(join(profile, 'package.json'), 'utf8'))
++  if (typeof manifest !== 'object' || manifest === null || !('dependencies' in manifest)
++    || typeof manifest.dependencies !== 'object' || manifest.dependencies === null) throw new Error('source health: invalid profile dependencies')
++  const versions: Record<string, string> = {}
++  for (const name of Object.keys(manifest.dependencies)) {
++    if (!/^(?:@[a-z0-9._~-]+\/)?[a-z0-9._~-]+$/u.test(name)) throw new Error('source health: invalid plugin package name')
++    const installed: unknown = JSON.parse(await readFile(join(profile, 'node_modules', ...name.split('/'), 'package.json'), 'utf8'))
++    if (typeof installed !== 'object' || installed === null || !('version' in installed) || typeof installed.version !== 'string') {
++      throw new Error(`source health: plugin version unavailable: ${name}`)
++    }
++    versions[name] = installed.version
++  }
++  return versions
++}
++
++/**
++ * Publish measured readiness and wait for the worker to request graceful exit.
++ * @param request - Isolated qualification paths and expected release.
++ * @param receipt - Actual app identity and startup measurements.
++ * @returns Completion when a matching token releases the health process; fails closed after two minutes.
++ */
++export async function awaitDesktopSourceHealthRelease(request: DesktopSourceHealthRequest, receipt: object): Promise<void> {
++  await writeFile(request.receiptPath, `${JSON.stringify({ schemaVersion: 1, token: request.token, ...receipt })}\n`, { flag: 'wx' })
++  const deadline = Date.now() + 120_000
++  while (Date.now() < deadline) {
++    let release: unknown
++    try { release = JSON.parse(await readFile(request.releasePath, 'utf8')) as unknown }
++    catch (error) {
++      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
++      await new Promise<void>((resolveWait) => { setTimeout(resolveWait, 200) })
++      continue
++    }
++    if (typeof release !== 'object' || release === null || !('token' in release) || release.token !== request.token
++      || !('action' in release) || release.action !== 'exit') throw new Error('source health: invalid release acknowledgement')
++    return
++  }
++  throw new Error('source health: worker release timed out')
++}
+diff --git a/apps/desktop/src/source-updater.ts b/apps/desktop/src/source-updater.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc25950c5c
+--- /dev/null
++++ b/apps/desktop/src/source-updater.ts
+@@ -0,0 +1,321 @@
++/** Launch-triggered source updates; installation admission stays with the running Desktop owner. */
++
++import { spawn } from 'node:child_process'
++import { existsSync } from 'node:fs'
++import { open, readFile, unlink, writeFile } from 'node:fs/promises'
++import { randomUUID } from 'node:crypto'
++import { dirname, isAbsolute, join, resolve } from 'node:path'
++
++/** Published release pinned by the worker before any source build. */
++export interface DesktopSourceTarget {
++  readonly version: string
++  readonly tag: string
++  readonly commit: string
++}
++
++/** Durable status returned by the local source build worker. */
++export interface DesktopSourceUpdateState {
++  readonly phase: string
++  readonly target?: DesktopSourceTarget
++  readonly detail?: string
++  readonly [key: string]: unknown
++}
++
++/** Local helper paths; an absent configuration leaves ordinary Desktop startup usable. */
++export interface DesktopSourceUpdaterPaths {
++  readonly worker: string
++  readonly config: string
++}
++
++/**
++ * Resolve the explicitly installed source-update helper.
++ * @param localAppData - Windows local application data directory; absent outside Windows.
++ * @param override - Explicit configuration path; when supplied, missing files never fall back to another installation.
++ * @param documentsDirectory - Optional stable Documents folder; its DSHUpdater helper takes precedence over the legacy local-data location.
++ * @returns Paths only when both helper and configuration exist.
++ */
++export function desktopSourceUpdaterPaths(
++  localAppData: string | undefined, override?: string, documentsDirectory?: string,
++): DesktopSourceUpdaterPaths | undefined {
++  const candidates = override === undefined ? [
++    ...(documentsDirectory === undefined ? [] : [join(documentsDirectory, 'DSHUpdater', 'updater-config.json')]),
++    ...(localAppData === undefined ? [] : [join(localAppData, 'DSH Source Updater', 'updater-config.json')]),
++  ] : [override]
++  for (const config of candidates) {
++    const worker = join(dirname(config), 'upgrade-worker.mjs')
++    if (existsSync(config) && existsSync(worker)) return { config, worker }
++  }
++  return undefined
++}
++
++/**
++ * Validate a worker response before allowing it to authorize a later operation.
++ * @param value - Parsed worker JSON.
++ * @returns Status with validated release identity when present.
++ */
++export function parseDesktopSourceUpdateState(value: unknown): DesktopSourceUpdateState {
++  if (typeof value !== 'object' || value === null || !('phase' in value) || typeof value.phase !== 'string') {
++    throw new Error('source updater: invalid worker status')
++  }
++  if ('target' in value && value.target !== undefined) {
++    const target = value.target
++    if (typeof target !== 'object' || target === null || !('version' in target) || typeof target.version !== 'string'
++      || !('tag' in target) || typeof target.tag !== 'string' || target.tag !== `dsh-v${target.version}`
++      || !('commit' in target) || typeof target.commit !== 'string' || !/^[0-9a-f]{40}$/u.test(target.commit)) {
++      throw new Error('source updater: invalid pinned release')
++    }
++  }
++  if ('detail' in value && value.detail !== undefined && typeof value.detail !== 'string') {
++    throw new Error('source updater: invalid worker detail')
++  }
++  return value as DesktopSourceUpdateState
++}
++
++/**
++ * Run the trusted local helper without a shell or application credentials.
++ * @param executable - Desktop executable, which must never host the worker that replaces it.
++ * @param paths - Installed worker and configuration.
++ * @param action - Worker operation.
++ * @param request - Main-process-owned request fields.
++ * @param detached - Apply uses its existing durable acceptance handshake. Checks and builds always detach with file-backed output; status uses short-lived pipes.
++ * @returns Worker JSON, or an acknowledged detached apply launch.
++ */
++export async function runDesktopSourceWorker(
++  executable: string, paths: DesktopSourceUpdaterPaths, action: 'check' | 'prepare' | 'apply' | 'status',
++  request: object, detached = false,
++): Promise<DesktopSourceUpdateState> {
++  const config: unknown = JSON.parse(await readFile(paths.config, 'utf8'))
++  if (typeof config !== 'object' || config === null || !('tools' in config)
++    || typeof config.tools !== 'object' || config.tools === null || !('node' in config.tools)
++    || typeof config.tools.node !== 'object' || config.tools.node === null || !('executable' in config.tools.node)
++    || typeof config.tools.node.executable !== 'string' || !isAbsolute(config.tools.node.executable)
++    || !existsSync(config.tools.node.executable) || resolve(config.tools.node.executable) === resolve(executable)) {
++    throw new Error('source updater: configure an independent Node executable outside the Desktop installation')
++  }
++  const environment = Object.fromEntries(Object.entries(process.env)
++    .filter(([key]) => !/KEY|SECRET|TOKEN|PASSWORD/iu.test(key)))
++  const arguments_ = [paths.worker, action, '--config', paths.config]
++  let acceptance: { path: string; token: string } | undefined
++  if (detached) {
++    const requestPath = join(dirname(paths.config), `apply-${randomUUID()}.json`)
++    acceptance = { path: `${requestPath}.accepted.json`, token: randomUUID() }
++    await writeFile(requestPath, `${JSON.stringify({ ...request, handoffToken: acceptance.token, handoffReceipt: acceptance.path })}\n`, { flag: 'wx', mode: 0o600 })
++    arguments_.push('--request-path', requestPath)
++  } else arguments_.push('--request', JSON.stringify(request))
++  const independent = !detached && (action === 'check' || action === 'prepare')
++  const outputBase = join(dirname(paths.config), `${action}-${randomUUID()}`)
++  const files = independent ? await (async () => {
++    const stdout = `${outputBase}.stdout.log`
++    const stderr = `${outputBase}.stderr.log`
++    const output = await open(stdout, 'wx', 0o600)
++    try { return { stdout, stderr, output, diagnostic: await open(stderr, 'wx', 0o600) } }
++    catch (error) { await output.close(); await unlink(stdout); throw error }
++  })() : undefined
++  let completed = false
++  let child: ReturnType<typeof spawn>
++  try {
++    child = spawn(config.tools.node.executable, arguments_, {
++      env: { ...environment, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, detached: detached || independent,
++      stdio: detached ? 'ignore' : files === undefined ? ['ignore', 'pipe', 'pipe'] : ['ignore', files.output.fd, files.diagnostic.fd],
++    })
++  } catch (error) {
++    if (files !== undefined) {
++      await Promise.all([files.output.close(), files.diagnostic.close()])
++      await Promise.all([unlink(files.stdout), unlink(files.stderr)])
++    }
++    throw error
++  }
++  return new Promise<DesktopSourceUpdateState>((resolve, reject) => {
++    // The process handle is unref'ed, while this bounded observation keeps standalone Node callers alive.
++    const observation = independent ? setTimeout(() => {
++      reject(new Error('source updater: observation deadline exceeded; detached worker continues independently'))
++    }, 8 * 60 * 60 * 1_000) : undefined
++    const finishObservation = (): void => { if (observation !== undefined) clearTimeout(observation) }
++    child.once('error', (error) => { completed = true; finishObservation(); reject(error) })
++    if (independent) child.once('spawn', () => { child.unref() })
++    if (detached) {
++      child.once('spawn', () => {
++        void (async () => {
++          if (acceptance === undefined) throw new Error('source updater: handoff receipt unavailable')
++          let exited: Error | undefined
++          child.once('exit', (code) => { exited = new Error(`source updater: install helper exited before accepting (${String(code)})`) })
++          const deadline = Date.now() + 20_000
++          while (Date.now() < deadline) {
++            let receipt: unknown
++            try { receipt = JSON.parse(await readFile(acceptance.path, 'utf8')) as unknown }
++            catch (error) {
++              if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
++            }
++            if (receipt !== undefined) {
++              if (typeof receipt !== 'object' || receipt === null || !('token' in receipt) || receipt.token !== acceptance.token
++                || !('accepted' in receipt) || receipt.accepted !== true) throw new Error('source updater: invalid install helper acceptance')
++              child.unref()
++              resolve({ phase: 'applying' })
++              return
++            }
++            if (exited !== undefined) throw exited
++            await new Promise<void>((wait) => { setTimeout(wait, 100) })
++          }
++          throw new Error('source updater: install helper did not accept the handoff')
++        })().catch((error: unknown) => { reject(error instanceof Error ? error : new Error(String(error))) })
++      })
++      return
++    }
++    let output = ''
++    let diagnostic = ''
++    child.stdout?.setEncoding('utf8')
++    child.stderr?.setEncoding('utf8')
++    child.stdout?.on('data', (chunk: string) => { output = (output + chunk).slice(-1_048_576) })
++    child.stderr?.on('data', (chunk: string) => { diagnostic = (diagnostic + chunk).slice(-8_192) })
++    child.once('close', (code, signal) => {
++      completed = true
++      finishObservation()
++      void (async () => {
++        if (files !== undefined) {
++          output = (await readFile(files.stdout, 'utf8')).slice(-1_048_576)
++          diagnostic = (await readFile(files.stderr, 'utf8')).slice(-8_192)
++        }
++        try {
++          const state = parseDesktopSourceUpdateState(JSON.parse(output.trim().split(/\r?\n/u).at(-1) ?? '') as unknown)
++          if (code !== 0 && !['blocked', 'failed'].includes(state.phase)) throw new Error('source updater: unsuccessful worker result')
++          resolve(state)
++        } catch (error) {
++          const failure = error instanceof Error ? error : new Error(String(error))
++          reject(code === 0 ? failure : new Error(`source updater: worker exited ${String(code)} (${String(signal)}): ${diagnostic}`))
++        }
++      })().catch((error: unknown) => { reject(error instanceof Error ? error : new Error(String(error))) })
++    })
++  }).finally(async () => {
++    if (files === undefined) return
++    await Promise.all([files.output.close(), files.diagnostic.close()])
++    // A cancelled observer leaves the running worker's files intact; a parent exit never reaches this cleanup.
++    if (completed) await Promise.all([unlink(files.stdout), unlink(files.stderr)])
++  })
++}
++
++/** Desktop-owned collaborators; unknown work or unsaved drafts refuse installation. */
++export interface DesktopSourceUpdaterOptions {
++  readonly request: object
++  readonly run: (action: 'check' | 'prepare' | 'apply' | 'status', request: object, detached?: boolean) => Promise<DesktopSourceUpdateState>
++  readonly idleMilliseconds: () => number
++  readonly prepareInstall: () => Promise<boolean>
++  readonly recoverInstall: () => Promise<void>
++  readonly quit: () => void
++  readonly publish: (state: DesktopSourceUpdateState) => void
++}
++
++/** One launch/check/build chain per Desktop process; only a ready build schedules idle admission checks. */
++export class DesktopSourceUpdater {
++  private pending: Promise<void> | undefined
++  private admissionPending: Promise<void> | undefined
++  private timer: ReturnType<typeof setTimeout> | undefined
++  private disposed = false
++  private ready: DesktopSourceUpdateState | undefined
++  private snapshot: DesktopSourceUpdateState = { phase: 'idle' }
++
++  /** @param options - Worker, status, idle, and graceful installation capabilities. */
++  constructor(private readonly options: DesktopSourceUpdaterOptions) {}
++
++  /** Last observed helper result, for the native status and retry dialog. */
++  get state(): DesktopSourceUpdateState { return this.snapshot }
++
++  /**
++   * Check once on a cold or second launch; concurrent launches join existing work.
++   * @returns Completion of the observed check and optional background build.
++   */
++  launch(): Promise<void> {
++    if (this.disposed) return Promise.resolve()
++    if (this.pending !== undefined) return this.pending
++    if (this.admissionPending !== undefined) return this.admissionPending
++    if (this.ready !== undefined) { this.scheduleAdmission(); return Promise.resolve() }
++    const pending = this.check().catch((error: unknown) => {
++      this.publish({ phase: 'failed', detail: error instanceof Error ? error.message : String(error) })
++    }).finally(() => { if (this.pending === pending) this.pending = undefined })
++    this.pending = pending
++    return pending
++  }
++
++  /** Stop idle admission checks; an independently locked worker owns any build already started. */
++  dispose(): void {
++    this.disposed = true
++    if (this.timer !== undefined) clearTimeout(this.timer)
++    this.timer = undefined
++  }
++
++  private publish(state: DesktopSourceUpdateState): void {
++    this.snapshot = state
++    if (!this.disposed) this.options.publish(state)
++  }
++
++  private isDisposed(): boolean { return this.disposed }
++
++  private async check(): Promise<void> {
++    this.publish({ phase: 'checking' })
++    let checked = await this.options.run('check', this.options.request)
++    while (!this.isDisposed() && ['busy', 'building'].includes(checked.phase)) {
++      this.publish(checked)
++      await new Promise<void>((resolveWait) => { setTimeout(resolveWait, 1_000) })
++      if (this.isDisposed()) return
++      checked = await this.options.run('status', this.options.request)
++    }
++    if (this.isDisposed()) return
++    this.publish(checked)
++    if (checked.phase !== 'available' && checked.phase !== 'ready') return
++    if (checked.target === undefined) throw new Error('source updater: release identity missing')
++    const prepared = checked.phase === 'ready' ? checked : await this.options.run('prepare', { ...this.options.request, target: checked.target })
++    if (this.isDisposed()) return
++    this.publish(prepared)
++    if (prepared.phase !== 'ready') return
++    if (prepared.target === undefined) throw new Error('source updater: prepared release identity missing')
++    this.ready = prepared
++    this.scheduleAdmission()
++  }
++
++  private scheduleAdmission(): void {
++    if (this.disposed || this.timer !== undefined || this.ready === undefined || this.admissionPending !== undefined) return
++    this.timer = setTimeout(() => {
++      this.timer = undefined
++      const admission = this.admit().catch((error: unknown) => {
++        this.publish({ phase: 'deferred', ...(this.ready?.target === undefined ? {} : { target: this.ready.target }),
++          detail: error instanceof Error ? error.message : String(error) })
++      }).finally(() => {
++        if (this.admissionPending === admission) this.admissionPending = undefined
++        this.scheduleAdmission()
++      })
++      this.admissionPending = admission
++    }, Math.max(1_000, 60_000 - this.options.idleMilliseconds()))
++    this.timer.unref()
++  }
++
++  private async admit(): Promise<void> {
++    const ready = this.ready
++    if (this.disposed || ready?.target === undefined) return
++    if (this.options.idleMilliseconds() < 60_000) {
++      this.timer = setTimeout(() => { this.timer = undefined; this.scheduleAdmission() }, 10_000)
++      this.timer.unref()
++      return
++    }
++    const admitted = await this.options.prepareInstall()
++    if (this.isDisposed()) {
++      if (admitted) await this.options.recoverInstall()
++      return
++    }
++    if (!admitted) {
++      this.timer = setTimeout(() => { this.timer = undefined; this.scheduleAdmission() }, 10_000)
++      this.timer.unref()
++      return
++    }
++    try {
++      await this.options.run('apply', { ...this.options.request, target: ready.target,
++        admission: { hostStopped: true, draftsSaved: true, drained: true, idleMs: this.options.idleMilliseconds(),
++          activeTasks: 0, pendingApprovals: 0, queuedMessages: 0, backgroundJobs: 0, admittedAt: new Date().toISOString() } }, true)
++    } catch (error) {
++      await this.options.recoverInstall()
++      throw error
++    }
++    if (this.isDisposed()) return
++    this.publish({ phase: 'applying', target: ready.target })
++    this.dispose()
++    this.options.quit()
++  }
++}
+diff --git a/apps/desktop/tests/fixtures/host-update-qualification.mjs b/apps/desktop/tests/fixtures/host-update-qualification.mjs
+index 4d09d86a87aae8ebaa4fb69a633617393c2bae14..51cfc494378811b3d3f78d9c7bdbc32ed774dd67 100644
+--- a/apps/desktop/tests/fixtures/host-update-qualification.mjs
++++ b/apps/desktop/tests/fixtures/host-update-qualification.mjs
+@@ -164,7 +164,7 @@ try {
+     }
+ 
+     ctx.effect(() => ctx.jobs.attachController('update-qualification'))
+-    for (const owner of [undefined, agent]) {
++    for (const owner of [undefined, agent.id]) {
+       let child
+       let done
+       const id = ctx.jobs.start({ kind: 'update-qualification', label: 'Private Node process waiting for stdin EOF', owner,
+diff --git a/apps/desktop/tests/source-update-health.spec.ts b/apps/desktop/tests/source-update-health.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a5a684b78601cc62d0b24a2d976cfac76947b41d
+--- /dev/null
++++ b/apps/desktop/tests/source-update-health.spec.ts
+@@ -0,0 +1,83 @@
++import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
++import { dirname, join } from 'node:path'
++import { tmpdir } from 'node:os'
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { readDesktopSourceHealthRequest } from '../src/source-update-health.ts'
++
++const temporary: string[] = []
++afterEach(() => { vi.unstubAllEnvs(); for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true }) })
++
++function fixture() {
++  const root = mkdtempSync(join(tmpdir(), 'dsh-source-health-'))
++  temporary.push(root)
++  vi.stubEnv('USERPROFILE', join(root, 'user'))
++  vi.stubEnv('APPDATA', join(root, 'roaming'))
++  vi.stubEnv('LOCALAPPDATA', join(root, 'local'))
++  vi.stubEnv('DSH_SOURCE_UPDATER_CONFIG', undefined)
++  const requestPath = join(root, 'request.json')
++  const request = { schemaVersion: 1, token: 'test-token-1234567890', receiptPath: join(root, 'receipt.json'), releasePath: join(root, 'release.json'),
++    homePath: join(root, 'snapshot', 'home'), userDataPath: join(root, 'snapshot', 'userData'), version: '0.2.1-alpha.5', commit: 'a'.repeat(40),
++    phase: 'isolated', plugins: [{ name: '@local/plugin', version: '1.0.0' }] }
++  const read = (changes: object = {}) => {
++    writeFileSync(requestPath, JSON.stringify({ ...request, ...changes }))
++    return readDesktopSourceHealthRequest([`--source-update-health=${requestPath}`])
++  }
++  const configPath = join(root, 'local', 'DSH Source Updater', 'updater-config.json')
++  const configure = (config: object, location = configPath): void => {
++    mkdirSync(dirname(location), { recursive: true })
++    writeFileSync(location, JSON.stringify(config))
++    writeFileSync(join(dirname(location), 'upgrade-worker.mjs'), '// Test helper discovery only.\n')
++  }
++  return { root, read, request, configure }
++}
++
++describe('health process data isolation', () => {
++  it('leaves ordinary launches alone and accepts isolated qualification requests', () => {
++    expect(readDesktopSourceHealthRequest(['--updated'])).toBeUndefined()
++    const f = fixture()
++    expect(f.read()).toMatchObject({ phase: 'isolated', homePath: f.request.homePath })
++  })
++
++  it('refuses the default live home, actual app settings directory, and configured live paths', () => {
++    const f = fixture()
++    expect(() => f.read({ homePath: join(f.root, 'user', '.dsh') })).toThrow('requires isolated')
++    expect(() => f.read({ userDataPath: join(f.root, 'roaming', '@deepseek-ai', 'dsh-desktop') })).toThrow('requires isolated')
++    f.configure({ sharedDataDir: f.request.homePath, userDataDir: f.request.userDataPath })
++    expect(() => f.read()).toThrow('requires isolated')
++  })
++
++  it('admits final validation only for the updater-configured matched data directories', () => {
++    const f = fixture()
++    expect(() => f.read({ phase: 'installed-final' })).toThrow('differ from updater')
++    f.configure({ sharedDataDir: f.request.homePath, userDataDir: f.request.userDataPath })
++    expect(f.read({ phase: 'installed-final' })).toMatchObject({ phase: 'installed-final' })
++    expect(() => f.read({ phase: 'installed-final', homePath: join(f.root, 'other') })).toThrow('differ from updater')
++  })
++
++  it('requires pinned identity and an explicit expected plugin inventory', () => {
++    const f = fixture()
++    expect(() => f.read({ commit: 'main' })).toThrow('invalid request identity')
++    expect(() => f.read({ plugins: [] })).toThrow('expected plugins missing')
++    expect(() => f.read({ token: '' })).toThrow('invalid request identity')
++    expect(() => f.read({ homePath: 'relative' })).toThrow('invalid homePath')
++  })
++
++  it('uses the Documents helper to validate final live-data paths', () => {
++    const f = fixture()
++    const documentsConfig = join(f.root, 'user', 'Documents', 'DSHUpdater', 'updater-config.json')
++    f.configure({ sharedDataDir: f.request.homePath, userDataDir: f.request.userDataPath }, documentsConfig)
++    f.configure({ sharedDataDir: join(f.root, 'wrong-home'), userDataDir: join(f.root, 'wrong-user-data') })
++    expect(f.read({ phase: 'installed-final' })).toMatchObject({ phase: 'installed-final' })
++  })
++
++  it('uses an explicit worker config for redirected Documents and never falls back when it is absent', () => {
++    const f = fixture()
++    const redirected = join(f.root, 'redirected-documents', 'DSHUpdater', 'updater-config.json')
++    f.configure({ sharedDataDir: f.request.homePath, userDataDir: f.request.userDataPath }, redirected)
++    vi.stubEnv('DSH_SOURCE_UPDATER_CONFIG', redirected)
++    expect(f.read({ phase: 'installed-final' })).toMatchObject({ phase: 'installed-final' })
++    f.configure({ sharedDataDir: f.request.homePath, userDataDir: f.request.userDataPath })
++    vi.stubEnv('DSH_SOURCE_UPDATER_CONFIG', join(f.root, 'missing', 'updater-config.json'))
++    expect(() => f.read({ phase: 'installed-final' })).toThrow('differ from updater')
++  })
++})
+diff --git a/apps/desktop/tests/source-updater-paths.spec.ts b/apps/desktop/tests/source-updater-paths.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..eb8aeeab6f12dc71aaf5d3a461fe4f6b7acd3202
+--- /dev/null
++++ b/apps/desktop/tests/source-updater-paths.spec.ts
+@@ -0,0 +1,60 @@
++import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
++import { dirname, join } from 'node:path'
++import { tmpdir } from 'node:os'
++import { afterEach, describe, expect, it } from 'vitest'
++import { desktopSourceUpdaterPaths } from '../src/source-updater.ts'
++
++const roots: string[] = []
++afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
++
++function fixture() {
++  const root = mkdtempSync(join(tmpdir(), 'dsh-updater-paths-'))
++  roots.push(root)
++  const documents = join(root, 'Documents')
++  const local = join(root, 'Local')
++  const install = (config: string, withWorker = true) => {
++    mkdirSync(dirname(config), { recursive: true })
++    writeFileSync(config, '{}\n')
++    const worker = join(dirname(config), 'upgrade-worker.mjs')
++    if (withWorker) writeFileSync(worker, '// Discovery fixture.\n')
++    return { config, worker }
++  }
++  return { root, documents, local, install }
++}
++
++describe('source helper discovery', () => {
++  it('prefers stable Documents over the legacy local-data helper', () => {
++    const f = fixture()
++    f.install(join(f.local, 'DSH Source Updater', 'updater-config.json'))
++    const expected = f.install(join(f.documents, 'DSHUpdater', 'updater-config.json'))
++    expect(desktopSourceUpdaterPaths(f.local, undefined, f.documents)).toEqual(expected)
++    expect(desktopSourceUpdaterPaths(undefined, undefined, f.documents)).toEqual(expected)
++  })
++
++  it('preserves legacy local-data discovery when no complete Documents helper exists', () => {
++    const f = fixture()
++    const expected = f.install(join(f.local, 'DSH Source Updater', 'updater-config.json'))
++    f.install(join(f.documents, 'DSHUpdater', 'updater-config.json'), false)
++    expect(desktopSourceUpdaterPaths(f.local, undefined, f.documents)).toEqual(expected)
++    expect(desktopSourceUpdaterPaths(f.local)).toEqual(expected)
++  })
++
++  it('honors an explicit override and never falls back to another helper', () => {
++    const f = fixture()
++    f.install(join(f.local, 'DSH Source Updater', 'updater-config.json'))
++    f.install(join(f.documents, 'DSHUpdater', 'updater-config.json'))
++    const expected = f.install(join(f.root, 'explicit', 'custom-config.json'))
++    expect(desktopSourceUpdaterPaths(f.local, expected.config, f.documents)).toEqual(expected)
++    expect(desktopSourceUpdaterPaths(f.local, join(f.root, 'missing.json'), f.documents)).toBeUndefined()
++    const incomplete = f.install(join(f.root, 'incomplete', 'updater-config.json'), false)
++    expect(desktopSourceUpdaterPaths(f.local, incomplete.config, f.documents)).toBeUndefined()
++  })
++
++  it('returns undefined when no complete helper is installed', () => {
++    const f = fixture()
++    expect(desktopSourceUpdaterPaths(undefined)).toBeUndefined()
++    expect(desktopSourceUpdaterPaths(f.local, undefined, f.documents)).toBeUndefined()
++    f.install(join(f.documents, 'DSHUpdater', 'updater-config.json'), false)
++    expect(desktopSourceUpdaterPaths(f.local, undefined, f.documents)).toBeUndefined()
++  })
++})
+diff --git a/apps/desktop/tests/source-updater.spec.ts b/apps/desktop/tests/source-updater.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b54b6b7313cd756173146257d467a1aaca237890
+--- /dev/null
++++ b/apps/desktop/tests/source-updater.spec.ts
+@@ -0,0 +1,182 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++import { DesktopSourceUpdater, parseDesktopSourceUpdateState, type DesktopSourceUpdateState } from '../src/source-updater.ts'
++
++const target = { version: '0.2.1-alpha.6', tag: 'dsh-v0.2.1-alpha.6', commit: 'a'.repeat(40) }
++const owners: DesktopSourceUpdater[] = []
++
++beforeEach(() => { vi.useFakeTimers() })
++afterEach(() => { for (const owner of owners.splice(0)) owner.dispose(); vi.useRealTimers() })
++
++function fixture() {
++  let idle = 60_000
++  const states: DesktopSourceUpdateState[] = []
++  const run = vi.fn(async (action: string): Promise<DesktopSourceUpdateState> => ({ phase: action === 'check' ? 'available' : action === 'prepare' ? 'ready' : 'applying', target }))
++  const prepareInstall = vi.fn(async () => true)
++  const recoverInstall = vi.fn(async () => {})
++  const quit = vi.fn()
++  const updater = new DesktopSourceUpdater({ request: { currentVersion: '0.2.1-alpha.5' }, run,
++    idleMilliseconds: () => idle, prepareInstall, recoverInstall, quit, publish: (state) => { states.push(state) } })
++  owners.push(updater)
++  return { updater, run, states, prepareInstall, recoverInstall, quit, input: () => { idle = 0 }, idle: () => { idle = 60_000 } }
++}
++
++describe('launch source updates', () => {
++  it('joins cold and second launches while a background build is pending', async () => {
++    const f = fixture()
++    const build = Promise.withResolvers<DesktopSourceUpdateState>()
++    f.run.mockImplementation(async action => action === 'check' ? { phase: 'available', target } : build.promise)
++    const first = f.updater.launch()
++    await Promise.resolve()
++    const second = f.updater.launch()
++    expect(second).toBe(first)
++    build.resolve({ phase: 'ready', target })
++    await first
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'prepare'])
++    expect(f.quit).not.toHaveBeenCalled()
++  })
++
++  it('has no timer and no build when no newer published release exists', async () => {
++    const f = fixture()
++    f.run.mockResolvedValue({ phase: 'current' })
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000)
++    expect(f.run).toHaveBeenCalledOnce()
++    expect(vi.getTimerCount()).toBe(0)
++    expect(f.quit).not.toHaveBeenCalled()
++  })
++
++  it('retains the running app on offline checks, build failure, and incompatible plugins', async () => {
++    for (const phase of ['failed', 'blocked']) {
++      const f = fixture()
++      f.run.mockImplementation(async action => action === 'check' ? { phase: 'available', target } : { phase, target, detail: 'plugin unavailable' })
++      await f.updater.launch()
++      await vi.advanceTimersByTimeAsync(120_000)
++      expect(f.quit).not.toHaveBeenCalled()
++      expect(f.updater.state.phase).toBe(phase)
++      expect(vi.getTimerCount()).toBe(0)
++    }
++    const offline = fixture()
++    offline.run.mockRejectedValue(new Error('offline'))
++    await offline.updater.launch()
++    expect(offline.updater.state).toMatchObject({ phase: 'failed', detail: 'offline' })
++  })
++
++  it('does not apply during user input or active work, then hands off after guarded idle', async () => {
++    const f = fixture()
++    f.input()
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(60_000)
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++    f.idle()
++    f.prepareInstall.mockResolvedValueOnce(false)
++    await vi.advanceTimersByTimeAsync(11_000)
++    expect(f.prepareInstall).toHaveBeenCalledOnce()
++    expect(f.quit).not.toHaveBeenCalled()
++    await vi.advanceTimersByTimeAsync(11_000)
++    expect(f.quit).toHaveBeenCalledOnce()
++    const apply = f.run.mock.calls.find(call => call[0] === 'apply')
++    expect(apply).toBeDefined()
++  })
++
++  it('restores the stopped host when the detached helper cannot start', async () => {
++    const f = fixture()
++    f.run.mockImplementation(async (action) => {
++      if (action === 'apply') throw new Error('spawn failed')
++      return { phase: action === 'check' ? 'available' : 'ready', target }
++    })
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(1_000)
++    expect(f.recoverInstall).toHaveBeenCalledOnce()
++    expect(f.quit).not.toHaveBeenCalled()
++    expect(f.updater.state.phase).toBe('deferred')
++  })
++
++  it('cancels idle admission on shutdown without cancelling an independently owned build', async () => {
++    const f = fixture()
++    await f.updater.launch()
++    f.updater.dispose()
++    await vi.advanceTimersByTimeAsync(60_000)
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++    expect(f.quit).not.toHaveBeenCalled()
++  })
++
++  it('joins second launches while task drain and graceful shutdown are pending', async () => {
++    const f = fixture()
++    const admission = Promise.withResolvers<boolean>()
++    f.prepareInstall.mockReturnValue(admission.promise)
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(1_000)
++    expect(f.prepareInstall).toHaveBeenCalledOnce()
++    const second = f.updater.launch()
++    const third = f.updater.launch()
++    expect(third).toBe(second)
++    await vi.advanceTimersByTimeAsync(60_000)
++    expect(f.prepareInstall).toHaveBeenCalledOnce()
++    expect(f.run.mock.calls.filter(call => call[0] === 'apply')).toHaveLength(0)
++    admission.resolve(true)
++    await second
++    expect(f.run.mock.calls.filter(call => call[0] === 'apply')).toHaveLength(1)
++    expect(f.quit).toHaveBeenCalledOnce()
++    await vi.advanceTimersByTimeAsync(60_000)
++    await f.updater.launch()
++    expect(f.prepareInstall).toHaveBeenCalledOnce()
++    expect(f.quit).toHaveBeenCalledOnce()
++    expect(vi.getTimerCount()).toBe(0)
++  })
++
++  it('recovers a prepared Host without handing off when shutdown cancels pending admission', async () => {
++    const f = fixture()
++    const admission = Promise.withResolvers<boolean>()
++    f.prepareInstall.mockReturnValue(admission.promise)
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(1_000)
++    const pending = f.updater.launch()
++    f.updater.dispose()
++    admission.resolve(true)
++    await pending
++    expect(f.recoverInstall).toHaveBeenCalledOnce()
++    expect(f.run.mock.calls.filter(call => call[0] === 'apply')).toHaveLength(0)
++    expect(f.quit).not.toHaveBeenCalled()
++    expect(vi.getTimerCount()).toBe(0)
++  })
++
++  it('does not recover an unprepared Host or rearm a timer after shutdown', async () => {
++    const f = fixture()
++    const admission = Promise.withResolvers<boolean>()
++    f.prepareInstall.mockReturnValue(admission.promise)
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(1_000)
++    const pending = f.updater.launch()
++    f.updater.dispose()
++    admission.resolve(false)
++    await pending
++    expect(f.recoverInstall).not.toHaveBeenCalled()
++    expect(f.quit).not.toHaveBeenCalled()
++    expect(vi.getTimerCount()).toBe(0)
++  })
++
++  it('does not quit again when application shutdown overlaps an accepted helper handoff', async () => {
++    const f = fixture()
++    const handoff = Promise.withResolvers<DesktopSourceUpdateState>()
++    f.run.mockImplementation(async action => action === 'apply' ? handoff.promise : { phase: action === 'check' ? 'available' : 'ready', target })
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(1_000)
++    const pending = f.updater.launch()
++    f.updater.dispose()
++    handoff.resolve({ phase: 'applying', target })
++    await pending
++    expect(f.recoverInstall).not.toHaveBeenCalled()
++    expect(f.quit).not.toHaveBeenCalled()
++    expect(vi.getTimerCount()).toBe(0)
++  })
++})
++
++describe('worker JSON', () => {
++  it('requires an official tag and immutable full commit before build admission', () => {
++    expect(parseDesktopSourceUpdateState({ phase: 'ready', target })).toMatchObject({ target })
++    expect(() => parseDesktopSourceUpdateState({ phase: 'ready', target: { ...target, tag: 'main' } })).toThrow('invalid pinned')
++    expect(() => parseDesktopSourceUpdateState({ phase: 'ready', target: { ...target, commit: 'main' } })).toThrow('invalid pinned')
++    expect(() => parseDesktopSourceUpdateState({ phase: 'ready', detail: 5 })).toThrow('invalid worker detail')
++    expect(() => parseDesktopSourceUpdateState(null)).toThrow('invalid worker status')
++  })
++})
+diff --git a/apps/desktop/tests/source-worker-background.spec.ts b/apps/desktop/tests/source-worker-background.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f699b3215e06ec3ded6c8b2b818e1d8d40e65c7e
+--- /dev/null
++++ b/apps/desktop/tests/source-worker-background.spec.ts
+@@ -0,0 +1,160 @@
++import { spawn } from 'node:child_process'
++import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++import { afterEach, describe, expect, it } from 'vitest'
++import { DesktopSourceUpdater, runDesktopSourceWorker } from '../src/source-updater.ts'
++
++const roots: string[] = []
++const target = { version: '0.2.1-alpha.6', tag: 'dsh-v0.2.1-alpha.6', commit: 'a'.repeat(40) }
++const repository = fileURLToPath(new URL('../../../', import.meta.url))
++const runnerModule = new URL('../src/source-updater.ts', import.meta.url).href
++
++async function waitForFile(filename: string, timeoutMs = 8_000): Promise<string> {
++  const deadline = Date.now() + timeoutMs
++  while (Date.now() < deadline) {
++    try { return await readFile(filename, 'utf8') }
++    catch (error) {
++      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
++    }
++    await new Promise<void>(resolve => { setTimeout(resolve, 25) })
++  }
++  throw new Error(`Fixture deadline exceeded: ${filename}`)
++}
++
++afterEach(async () => {
++  for (const root of roots.splice(0)) {
++    let pid: number | undefined
++    try { pid = (JSON.parse(await readFile(join(root, 'started.json'), 'utf8')) as { pid: number }).pid }
++    catch (_error: unknown) { /* A failed spawn has no child to reclaim. */ }
++    if (pid !== undefined) {
++      try { process.kill(pid, 0); process.kill(pid) }
++      catch (_error: unknown) { /* Completed fixture workers have already exited. */ }
++      await new Promise<void>(resolve => { setTimeout(resolve, 50) })
++    }
++    await rm(root, { recursive: true, force: true })
++  }
++})
++
++async function fixture() {
++  const root = await mkdtemp(join(tmpdir(), 'dsh-background-worker-'))
++  roots.push(root)
++  const paths = { worker: join(root, 'upgrade-worker.mjs'), config: join(root, 'updater-config.json') }
++  await writeFile(paths.config, JSON.stringify({ root, tools: { node: { executable: process.execPath } } }))
++  await writeFile(paths.worker, `
++    import * as fs from 'node:fs/promises';
++    import path from 'node:path';
++    const action = process.argv[2];
++    const config = JSON.parse(await fs.readFile(process.argv[process.argv.indexOf('--config') + 1], 'utf8'));
++    const root = config.root;
++    const target = ${JSON.stringify(target)};
++    const status = path.join(root, 'status.json');
++    const lock = path.join(root, 'worker.lock');
++    const readStatus = async () => JSON.parse(await fs.readFile(status, 'utf8'));
++    if (action === 'status') { process.stdout.write(JSON.stringify(await readStatus()) + '\\n'); process.exit(0); }
++    try { await fs.writeFile(lock, JSON.stringify({ pid: process.pid }), { flag: 'wx' }); }
++    catch (error) {
++      if (error.code !== 'EEXIST') throw error;
++      process.stdout.write(JSON.stringify({ ...await readStatus(), phase: 'busy' }) + '\\n');
++      process.exit(0);
++    }
++    await fs.writeFile(status, JSON.stringify({ phase: action === 'prepare' ? 'building' : 'checking', target }));
++    await fs.writeFile(path.join(root, 'started.json'), JSON.stringify({ pid: process.pid, action }));
++    if (action === 'prepare') {
++      const countPath = path.join(root, 'prepare-count');
++      const count = await fs.readFile(countPath, 'utf8').catch(() => '0');
++      await fs.writeFile(countPath, String(Number(count) + 1));
++    }
++    await new Promise(resolve => setTimeout(resolve, 1_200));
++    const result = { phase: action === 'prepare' ? 'ready' : 'current', target };
++    await fs.writeFile(status, JSON.stringify(result));
++    await fs.unlink(lock);
++    await fs.writeFile(path.join(root, 'completed.json'), JSON.stringify(result));
++    process.stdout.write(JSON.stringify(result) + '\\n');
++  `)
++  return { root, paths, executable: join(root, 'old-client.exe') }
++}
++
++async function runParent(f: Awaited<ReturnType<typeof fixture>>, action: 'check' | 'prepare', quitEarly: boolean): Promise<void> {
++  const parent = join(f.root, `parent-${action}.mjs`)
++  await writeFile(parent, `
++    import * as fs from 'node:fs/promises';
++    import { runDesktopSourceWorker } from ${JSON.stringify(runnerModule)};
++    const result = runDesktopSourceWorker(${JSON.stringify(f.executable)}, ${JSON.stringify(f.paths)}, ${JSON.stringify(action)}, { schemaVersion: 1 });
++    ${quitEarly ? `
++      result.catch(() => {});
++      for (;;) {
++        try { await fs.access(${JSON.stringify(join(f.root, 'started.json'))}); break; }
++        catch { await new Promise(resolve => setTimeout(resolve, 10)); }
++      }
++      process.exit(0);
++    ` : `await fs.writeFile(${JSON.stringify(join(f.root, 'parent-result.json'))}, JSON.stringify(await result));`}
++  `)
++  const child = spawn(process.execPath, ['--import', 'tsx/esm', parent], {
++    cwd: repository, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
++  })
++  let diagnostic = ''
++  child.stderr.setEncoding('utf8')
++  child.stderr.on('data', (chunk: string) => { diagnostic += chunk })
++  const exit = await new Promise<number | null>((resolve, reject) => {
++    child.once('error', reject)
++    child.once('close', (code) => { resolve(code) })
++  })
++  expect(exit, diagnostic).toBe(0)
++}
++
++describe('background source workers', () => {
++  it.each(['check', 'prepare'] as const)('keeps a standalone parent alive until %s completes and cleans only its output files', async (action) => {
++    const f = await fixture()
++    const unrelated = join(f.root, 'unrelated.stdout.log')
++    await writeFile(unrelated, 'keep')
++    await runParent(f, action, false)
++    expect(JSON.parse(await readFile(join(f.root, 'parent-result.json'), 'utf8'))).toMatchObject({ phase: action === 'prepare' ? 'ready' : 'current' })
++    expect((await readdir(f.root)).filter(name => /\.(?:stdout|stderr)\.log$/u.test(name))).toEqual(['unrelated.stdout.log'])
++    expect(await readFile(unrelated, 'utf8')).toBe('keep')
++  }, 15_000)
++
++  it.each(['check', 'prepare'] as const)('lets %s finish and release its private lock after the real parent process exits', async (action) => {
++    const f = await fixture()
++    await runParent(f, action, true)
++    expect((JSON.parse(await waitForFile(join(f.root, 'completed.json'))) as { phase: string }).phase).toBe(action === 'prepare' ? 'ready' : 'current')
++    expect(await readdir(f.root)).not.toContain('worker.lock')
++    expect((await readdir(f.root)).filter(name => /\.(?:stdout|stderr)\.log$/u.test(name))).toHaveLength(2)
++  }, 15_000)
++
++  it('joins an orphaned build through busy/status without starting another prepare', async () => {
++    const f = await fixture()
++    await runParent(f, 'prepare', true)
++    const phases: string[] = []
++    const updater = new DesktopSourceUpdater({ request: { schemaVersion: 1 },
++      run: (action, request, detached) => runDesktopSourceWorker(f.executable, f.paths, action, request, detached),
++      idleMilliseconds: () => 0, prepareInstall: async () => false, recoverInstall: async () => {}, quit: () => {},
++      publish: state => { phases.push(state.phase) },
++    })
++    try {
++      await updater.launch()
++      expect(phases).toContain('busy')
++      expect(updater.state.phase).toBe('ready')
++      expect(await readFile(join(f.root, 'prepare-count'), 'utf8')).toBe('1')
++      expect(await readdir(f.root)).not.toContain('worker.lock')
++    } finally { updater.dispose() }
++  }, 15_000)
++
++  it('reads failed-worker diagnostics from its file and releases handles before cleanup', async () => {
++    const f = await fixture()
++    await writeFile(f.paths.worker, "process.stderr.write('private fixture failure'); process.exit(3);\n")
++    await expect(runDesktopSourceWorker(f.executable, f.paths, 'prepare', { schemaVersion: 1 }))
++      .rejects.toThrow('private fixture failure')
++    expect((await readdir(f.root)).filter(name => /\.(?:stdout|stderr)\.log$/u.test(name))).toHaveLength(0)
++  })
++
++  it('releases both output handles when the configured worker executable cannot spawn', async () => {
++    const f = await fixture()
++    const invalidExecutable = join(f.root, 'invalid-node.exe')
++    await writeFile(invalidExecutable, 'not an executable')
++    await writeFile(f.paths.config, JSON.stringify({ tools: { node: { executable: invalidExecutable } } }))
++    await expect(runDesktopSourceWorker(f.executable, f.paths, 'check', {})).rejects.toThrow()
++    expect((await readdir(f.root)).filter(name => /\.(?:stdout|stderr)\.log$/u.test(name))).toHaveLength(0)
++  })
++})
+diff --git a/apps/desktop/tests/source-worker-handoff.spec.ts b/apps/desktop/tests/source-worker-handoff.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..94b147280111d486123816ecd65a602bd20615b3
+--- /dev/null
++++ b/apps/desktop/tests/source-worker-handoff.spec.ts
+@@ -0,0 +1,45 @@
++import { mkdtemp, rm, writeFile } from 'node:fs/promises'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { afterEach, expect, it } from 'vitest'
++import { runDesktopSourceWorker } from '../src/source-updater.ts'
++
++const directories: string[] = []
++afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }) })
++
++async function helper(source: string) {
++  const directory = await mkdtemp(join(tmpdir(), 'dsh-handoff-test-'))
++  directories.push(directory)
++  const worker = join(directory, 'worker.mjs')
++  const config = join(directory, 'config.json')
++  await writeFile(worker, source)
++  await writeFile(config, JSON.stringify({ tools: { node: { executable: process.execPath } } }))
++  return { executable: join(directory, 'old-client.exe'), paths: { worker, config } }
++}
++
++it('keeps the original process alive when the helper exits before validating its handoff', async () => {
++  const fixture = await helper('process.exit(3)')
++  await expect(runDesktopSourceWorker(fixture.executable, fixture.paths, 'apply', { schemaVersion: 1 }, true)).rejects.toThrow('before accepting')
++})
++
++it('acknowledges only the matching durable receipt before allowing Desktop to quit', async () => {
++  const fixture = await helper(`
++    import { readFile, writeFile } from 'node:fs/promises';
++    const filename = process.argv[process.argv.indexOf('--request-path') + 1];
++    const request = JSON.parse(await readFile(filename, 'utf8'));
++    await writeFile(request.handoffReceipt, JSON.stringify({ token: request.handoffToken, accepted: true }));
++    setTimeout(() => {}, 250);
++  `)
++  await expect(runDesktopSourceWorker(fixture.executable, fixture.paths, 'apply', { schemaVersion: 1 }, true)).resolves.toEqual({ phase: 'applying' })
++})
++
++it('refuses a receipt belonging to another update attempt', async () => {
++  const fixture = await helper(`
++    import { readFile, writeFile } from 'node:fs/promises';
++    const filename = process.argv[process.argv.indexOf('--request-path') + 1];
++    const request = JSON.parse(await readFile(filename, 'utf8'));
++    await writeFile(request.handoffReceipt, JSON.stringify({ token: 'another-attempt', accepted: true }));
++    setTimeout(() => {}, 250);
++  `)
++  await expect(runDesktopSourceWorker(fixture.executable, fixture.paths, 'apply', { schemaVersion: 1 }, true)).rejects.toThrow('invalid install helper acceptance')
++})

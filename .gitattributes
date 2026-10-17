@@ -1,0 +1,7 @@
+* text=auto eol=lf
+# Keep all pinned bytes stable across Windows and Unix checkouts.
+plugins/baseline-sources/** -text
+patches/*.patch -text
+*.tgz -text
+*.png -text
+*.jpg -text

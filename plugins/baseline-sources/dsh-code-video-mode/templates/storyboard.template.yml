@@ -1,0 +1,47 @@
+# 统一 Storyboard 规范（唯一事实源）
+# 冻结后代码服从本文件；修改必须先改这里并记录原因。
+version: 1
+project: <slug>
+frozen: false              # 冻结后置 true，之后只允许追加修订记录
+
+video:
+  title: <标题>
+  duration_s: 30
+  fps: 30
+  width: 1920
+  height: 1080
+  total_frames: 900        # = duration_s * fps，必须与 timeline.csv 累计一致
+  language: zh-CN
+  aspect: "16:9"
+
+narrative:
+  audience: <给谁看>
+  key_message: <看完要记住的一句话>
+  hook: <前三秒的钩子>
+  ending: <如何收束>
+
+scenes:
+  - id: S01
+    title: <场景名>
+    parallel: false        # 是否允许并行实现
+    shots:
+      - id: S01-01
+        start_frame: 0
+        frames: 90
+        beat: <叙事节拍，例如"提出问题">
+        visual: <画面主体与构图>
+        motion: <运动：镜头 + 元素>
+        easing: <缓动名与参数，例如 easeOutCubic / spring(stiffness,damping)>
+        on_screen_text:
+          - <屏幕文字，≤14 中文字/行>
+        audio_cue: <vo-01 | whoosh | impact | riser | click | 无>
+        transition_out: <匹配剪辑-线条 | 遮罩推进 | 形变 | 无>
+        effects: [<效果名，附强度>]
+        notes: <风险与坑>
+
+# 修订记录：方案冻结后的每次修改都追加一行
+revisions:
+  - frame: <修订日期>
+    change: <改了什么>
+    reason: <为什么必须改>
+    impact: <影响哪些场景/镜头>

@@ -1,0 +1,19 @@
+# DPIRA for adaptive mode with Max
+
+This section applies to engineering tasks with macro work items while the current conversation uses adaptive mode and its independent DPIRA Max function is enabled. The Max function does not set or depend on the model's reasoning effort. An active Goal takes precedence; suspend DPIRA and follow Goal's own rules until it ends. In DPIRA Plan, use the dedicated D/P planning guidance and the native Plan read-only and approval rules; do not start I/R/A until the plan is approved and the Plan session has ended. Treat a work item as a feature, module, subsystem, or implementation batch, not an individual function, file, or handler. For simple questions and tasks without engineering work items, continue the ordinary adaptive workflow. Follow the user's scope and existing DSH permission and risk gates.
+
+## D — Design / Define
+
+Before implementation, establish and briefly record the goal, scope, dependencies, constraints, excluded changes, technical approach, macro work items, and acceptance evidence. Resolve material ambiguity with inspection or the user. Freeze the design and acceptance criteria for this batch; preserve relevant existing capabilities and data. Do not start implementation without this baseline.
+
+## P — Plan Review
+
+Review the frozen design for completeness, executable and decidable acceptance criteria, dependency order, and conflicts with earlier decisions or the current environment. Fix failed review findings in D, then repeat P. Internal P does not create a new requirement for user approval on every task. When DPIRA Plan was entered by the Plan button, /plan, or the narrow automatic trigger, its D/P work must be submitted through exit_plan_mode. A conversational agreement or /plan off is not approval of that plan. On approval, return to I/R/A against the approved design. If the user leaves Plan without approval, do not treat the unfinished plan as permission to implement; reassess the remaining request under the current mode and user direction.
+
+## I ↔ R — Per-item Implementation and Review
+
+For each macro work item, implement only against the frozen design, with relevant static checks and checks before writes. Then review that item's actual diff and results, run tests permitted by the task, and check its own acceptance criteria. A failed R returns to I for that same item, followed by a fresh R. Mark an item `draft_complete` only after its R passes. Finish one item's R before starting implementation of the next item. Keep a compact current-task ledger of D/P, item status, evidence, and unresolved failures using the existing todo/session mechanism; do not write persistent memory unless asked.
+
+## A — Whole-batch Audit
+
+Start A only after every item is `draft_complete`, including a project with just one macro item. Before telling the user the project is complete, run a separate project-level self-check against every acceptance criterion frozen in D. Inspect the complete changed result and integration boundaries; run applicable tests, build or static checks, and a startup or real use path when the task calls for them. Read the outcomes rather than assuming that running a command proves success. If a check fails, repair the affected item through I and R, then repeat A. If a check cannot run, record it as Unknown with the reason and do not call it passed. The project is deliverable only after the required checks pass, or after honestly identifying any remaining unverified scope and limitations. Report the final evidence, remaining unknowns, and actual delivery result. If A reveals a systemic or directional fault in the goal, scope, design, or core assumptions, start a new D/P batch and submit the revised design through the existing approval gate when it applies. A single-item review never substitutes for A; a local defect does not by itself reset the whole design.

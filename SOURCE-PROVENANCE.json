@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "officialRepository": "https://github.com/deepseek-ai/deepseek-harness",
+  "originalDesktopVersion": "0.2.0-rc.2",
+  "originalDesktopCommit": "04f392c9ddd144fa426da2045178797da6db6c11",
+  "targetTag": "dsh-v0.2.1-alpha.5",
+  "targetVersion": "0.2.1-alpha.5",
+  "officialBaseCommit": "1517a4dbca0a2789ff1d41ba439600f8547d23fa",
+  "targetCommit": "1517a4dbca0a2789ff1d41ba439600f8547d23fa",
+  "pluginBaselineVersions": {
+    "@local/dsh-adaptive-mode": "0.1.14",
+    "@local/dsh-code-video-mode": "0.1.3",
+    "@local/dsh-ui-model-selection-collapsible": "0.2.3"
+  },
+  "baselinePinnedFiles": 77,
+  "baselineSourceFiles": 106,
+  "patchSha256": {
+    "source-changes.patch": "2299c8cf01b3ab0165daede77df1908412659349bc3e927dacf39ec8197dd53e",
+    "source-compatibility.patch": "241855f4a39c9ca922d1d6c848c2b5ed1cddaad4977b90915131a52a61736aad"
+  },
+  "publicationLicenseForLocalContributions": "MIT"
+}

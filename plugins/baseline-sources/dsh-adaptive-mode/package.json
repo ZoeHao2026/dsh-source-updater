@@ -1,0 +1,55 @@
+{
+  "name": "@local/dsh-adaptive-mode",
+  "version": "0.1.14",
+  "private": true,
+  "type": "module",
+  "description": "DSH adaptive agent mode based on the complete standard preset",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./plan-entry": "./lib/plan-entry.js",
+    "./dpira-max": "./lib/dpira-max.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "lib/plan-entry.js",
+    "lib/index.js",
+    "lib/dpira-max.js",
+    "lib/client.js",
+    "lib/client.js.map",
+    "framework/*.md",
+    "playbooks/*.md",
+    "sop/*.md",
+    "workflow/*.md",
+    "skills/*/SKILL.md",
+    "README.md"
+  ],
+  "scripts": {
+    "build:preset": "node scripts/build-preset.mjs",
+    "build:client": "node scripts/build-client.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-agent-preset"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
