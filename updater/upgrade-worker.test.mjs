@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { acquireLock, assertWithin, atomicJson, Blocked, compareVersions, ensureBuildCache, hashFile, latestPublished, requireManualRecovery, restoreTree, restorePreservedDependencyLinks, snapshotTree, sourceBuildLayout, sourceInstallArguments, validateAdmission, verifyPublishedTarget, verifySnapshot } from './upgrade-worker.mjs';
 
 async function temporary(t) {
@@ -100,13 +102,18 @@ test('short source cache claims only an empty owned directory and retains unfami
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'db-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const config = { root: path.join(root, 'helper'), buildCacheDir: path.join(root, 'c'), tools: { powershell: { executable: path.join(process.env.SystemRoot ?? '', 'System32/WindowsPowerShell/v1.0/powershell.exe') } } };
+  const unknown = path.join(root, 'unknown');
+  for (const directory of [config.buildCacheDir, unknown]) {
+    await fs.mkdir(directory);
+    if (process.platform === 'win32') execFileSync(config.tools.powershell.executable, ['-NoProfile', '-NonInteractive', '-File', fileURLToPath(new URL('./tests/own-cache-fixture.ps1', import.meta.url)), '-CachePath', directory], { windowsHide: true });
+  }
   const layout = sourceBuildLayout(config, { commit: 'a'.repeat(40), tag: 'dsh-v0.2.1' }, 'b'.repeat(64));
   await ensureBuildCache(config, layout);
   const marker = JSON.parse(await fs.readFile(path.join(layout.cache, '.dsh-source-cache.json'), 'utf8'));
   await ensureBuildCache(config, layout);
   assert.equal(marker.schemaVersion, 1);
   await assert.rejects(ensureBuildCache({ ...config, root: path.join(root, 'different-helper') }, layout), /another updater/);
-  const unknown = path.join(root, 'unknown'); await fs.mkdir(unknown); await fs.writeFile(path.join(unknown, 'retain.txt'), 'do not modify');
+  await fs.writeFile(path.join(unknown, 'retain.txt'), 'do not modify');
   await assert.rejects(ensureBuildCache({ ...config, buildCacheDir: unknown }, { ...layout, cache: unknown, buildRoot: path.join(unknown, '0123456789abcdef') }), /Unfamiliar nonempty/);
   assert.equal(await fs.readFile(path.join(unknown, 'retain.txt'), 'utf8'), 'do not modify');
 });

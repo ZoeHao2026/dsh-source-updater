@@ -77,7 +77,8 @@
     "Recovery integration requires three explicit absolute fixture arguments and an owned physical sandbox; it never discovers a live updater configuration.",
     "The optional short-path pnpm fixture requires an explicit source checkout before creating temporary data.",
     "Only test fixtures and documentation were adapted; the production helper modules are unchanged.",
-    "The cache ownership fixture resolves its own temporary root to the physical path so Windows 8.3 aliases do not resemble a redirected build cache."
+    "The cache ownership fixture resolves its own temporary root to the physical path so Windows 8.3 aliases do not resemble a redirected build cache.",
+    "On elevated Windows runners, the ownership fixture assigns the current SID only to its own disposable cache directories before exercising the unchanged ownership guard."
   ],
   "publicStandaloneVerification": {
     "platform": "Windows x64",
