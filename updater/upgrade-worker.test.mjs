@@ -96,7 +96,8 @@ test('source cache refuses long, redirected-prone, relative and state-overlappin
 });
 
 test('short source cache claims only an empty owned directory and retains unfamiliar data', async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'db-'));
+  // Hosted Windows runners may expose their temporary directory through an 8.3 alias.
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'db-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const config = { root: path.join(root, 'helper'), buildCacheDir: path.join(root, 'c'), tools: { powershell: { executable: path.join(process.env.SystemRoot ?? '', 'System32/WindowsPowerShell/v1.0/powershell.exe') } } };
   const layout = sourceBuildLayout(config, { commit: 'a'.repeat(40), tag: 'dsh-v0.2.1' }, 'b'.repeat(64));
