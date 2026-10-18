@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { acquireLock, assertWithin, atomicJson, Blocked, compareVersions, ensureBuildCache, hashFile, latestPublished, requireManualRecovery, restoreTree, restorePreservedDependencyLinks, snapshotTree, sourceBuildLayout, sourceInstallArguments, validateAdmission, verifyPublishedTarget, verifySnapshot } from './upgrade-worker.mjs';
+import { acquireLock, assertWithin, atomicJson, Blocked, compareVersions, ensureBuildCache, hashFile, latestPublished, requireManualRecovery, restoreTree, restorePreservedDependencyLinks, snapshotTree, sourceBuildLayout, sourceInstallArguments, validateAdmission, verifyPublishedTarget, verifySnapshot, verifySnapshotSource } from './upgrade-worker.mjs';
 
 async function temporary(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-updater-test-'));
@@ -147,6 +147,41 @@ test('snapshot corruption is detected before program or data restoration', async
   await assert.rejects(verifySnapshot(manifest), /hash mismatch/);
   await assert.rejects(restoreTree(manifest), /hash mismatch/);
   assert.equal(await fs.readFile(path.join(source, 'session.jsonl'), 'utf8'), 'original history');
+});
+
+test('a previously copied source file changing while a later file copies fails the completed snapshot', async t => {
+  const root = await temporary(t); const source = path.join(root, 'home'); const backup = path.join(root, 'backup');
+  await fs.mkdir(source); await fs.writeFile(path.join(source, 'a.txt'), 'original A');
+  const later = await fs.open(path.join(source, 'b-large.bin'), 'wx'); await later.truncate(64 * 1024 * 1024); await later.close();
+  const copying = snapshotTree(source, backup);
+  // Register a rejection handler immediately while waiting for the later output to begin.
+  const outcome = copying.then(value => ({ value }), error => ({ error }));
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const progress = await fs.stat(path.join(backup, 'b-large.bin')).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
+    if (progress?.size > 0) break;
+    if (Date.now() > deadline) throw new Error('The isolated later-file copy did not begin');
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+  await fs.writeFile(path.join(source, 'a.txt'), 'changed A!');
+  const result = await outcome;
+  assert.ok(result.error, 'snapshot must reject a source edit after its per-file copy check finished');
+  assert.match(result.error.message, /Source changed after snapshot copy: a.txt/);
+});
+
+test('completed source verification detects new children, removed children and changed junction topology', async t => {
+  const root = await temporary(t); const source = path.join(root, 'home'); const external = path.join(root, 'one'); const other = path.join(root, 'two');
+  for (const directory of [source, external, other]) await fs.mkdir(directory);
+  for (const directory of [external, other]) await fs.writeFile(path.join(directory, 'index.js'), 'same bytes');
+  await fs.writeFile(path.join(source, 'a.txt'), 'original');
+  await fs.symlink(external, path.join(source, 'plugin'), process.platform === 'win32' ? 'junction' : 'dir');
+  const manifest = await snapshotTree(source, path.join(root, 'backup'));
+  await verifySnapshotSource(manifest);
+  await fs.writeFile(path.join(source, 'new.txt'), 'new'); await assert.rejects(verifySnapshotSource(manifest), /Source changed/); await fs.unlink(path.join(source, 'new.txt'));
+  await fs.rename(path.join(source, 'a.txt'), path.join(root, 'saved.txt')); await assert.rejects(verifySnapshotSource(manifest), /Source changed/); await fs.rename(path.join(root, 'saved.txt'), path.join(source, 'a.txt'));
+  await fs.unlink(path.join(source, 'plugin')); await fs.symlink(other, path.join(source, 'plugin'), process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(verifySnapshotSource(manifest), /Source changed after snapshot copy: plugin/);
+  assert.equal(await fs.readFile(path.join(external, 'index.js'), 'utf8'), 'same bytes');
 });
 
 test('external plugin junction bytes are snapshotted, isolated, then original topology restored', async t => {

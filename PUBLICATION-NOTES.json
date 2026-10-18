@@ -76,15 +76,15 @@
     "Deployment tests resolve repository-relative public plugin pins and create isolated fake tool manifests.",
     "Recovery integration requires three explicit absolute fixture arguments and an owned physical sandbox; it never discovers a live updater configuration.",
     "The optional short-path pnpm fixture requires an explicit source checkout before creating temporary data.",
-    "Only test fixtures and documentation were adapted; the production helper modules are unchanged.",
     "The cache ownership fixture resolves its own temporary root to the physical path so Windows 8.3 aliases do not resemble a redirected build cache.",
-    "On elevated Windows runners, the ownership fixture assigns the current SID only to its own disposable cache directories before exercising the unchanged ownership guard."
+    "On elevated Windows runners, the ownership fixture assigns the current SID only to its own disposable cache directories before exercising the unchanged ownership guard.",
+    "Public runtime helper bytes match the corrected canonical helper; cache ownership and relative deployment fixtures remain public-only adaptations."
   ],
   "publicStandaloneVerification": {
     "platform": "Windows x64",
     "nodeMajor": 24,
-    "tests": 26,
-    "passed": 26,
+    "tests": 39,
+    "passed": 39,
     "failed": 0,
     "networkRequired": false,
     "realClientOrConfigurationRequired": false
@@ -101,5 +101,6 @@
     "compatiblePackages": 3,
     "declarationCheckPassed": true,
     "pluginSourceFiles": 11
-  }
+  },
+  "maintenanceRelease": "0.1.1"
 }

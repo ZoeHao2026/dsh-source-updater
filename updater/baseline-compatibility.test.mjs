@@ -42,6 +42,7 @@ test('manual plugin version and runtime edits cannot be replaced by the pinned b
   const active = path.join(home, 'profiles/desktop/node_modules/@local/example');
   await fs.mkdir(original, { recursive: true }); await fs.mkdir(active, { recursive: true });
   const manifest = { name: '@local/example', version: '0.1.14', main: 'index.js', dependencies: { zod: '4.6.5' } };
+  await fs.writeFile(path.join(home, 'profiles/desktop/package.json'), JSON.stringify({ dependencies: { [manifest.name]: manifest.version } }));
   for (const directory of [original, active]) {
     await fs.writeFile(path.join(directory, 'package.json'), JSON.stringify(manifest));
     await fs.writeFile(path.join(directory, 'index.js'), 'original runtime');
@@ -49,6 +50,9 @@ test('manual plugin version and runtime edits cannot be replaced by the pinned b
   const config = { plugins: [{ name: manifest.name, version: manifest.version, path: original, files: { 'index.js': await hashFile(path.join(original, 'index.js')) } }] };
   await assertActivePlugins(config, home);
   await fs.writeFile(path.join(active, 'package.json'), JSON.stringify({ ...manifest, version: '0.1.14+dsh.0.2.1-alpha.5' }));
+  await assert.rejects(assertActivePlugins(config, home), /explicit trusted activePluginPins/);
+  config.activePluginPins = path.join(root, 'trusted-active-plugins.json');
+  await fs.writeFile(config.activePluginPins, JSON.stringify({ plugins: [{ name: manifest.name, version: '0.1.14+dsh.0.2.1-alpha.5', files: { 'package.json': await hashFile(path.join(active, 'package.json')), 'index.js': await hashFile(path.join(active, 'index.js')) } }] }));
   await assertActivePlugins(config, home);
   await fs.writeFile(path.join(active, 'index.js'), 'manual feature change');
   await assert.rejects(assertActivePlugins(config, home), /Active plugin file changed: @local\/example\/index.js/);

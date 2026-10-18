@@ -1,5 +1,5 @@
 diff --git a/apps/desktop-host/src/index.ts b/apps/desktop-host/src/index.ts
-index 3086755b0bf5da567f01531cef2093ee597c2fbb..c7be1bc02381bb0399a303f7b190f2c8b5472b87 100644
+index 3086755b..c7be1bc0 100644
 --- a/apps/desktop-host/src/index.ts
 +++ b/apps/desktop-host/src/index.ts
 @@ -14,6 +14,7 @@ import { installDesktopUpdateTaskControl } from './update-tasks.ts'
@@ -38,7 +38,7 @@ index 3086755b0bf5da567f01531cef2093ee597c2fbb..c7be1bc02381bb0399a303f7b190f2c8
    await ctx.plugin(desktopOffice, {
 diff --git a/apps/desktop-host/src/source-update-health.ts b/apps/desktop-host/src/source-update-health.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..5d08480b46add6f937250d2171205ed3631d0b5a
+index 00000000..5d08480b
 --- /dev/null
 +++ b/apps/desktop-host/src/source-update-health.ts
 @@ -0,0 +1,59 @@
@@ -103,7 +103,7 @@ index 0000000000000000000000000000000000000000..5d08480b46add6f937250d2171205ed3
 +}
 diff --git a/apps/desktop-host/tests/source-update-health.spec.ts b/apps/desktop-host/tests/source-update-health.spec.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..6927708b210075cb5e061c454bf419940c4cba9b
+index 00000000..6927708b
 --- /dev/null
 +++ b/apps/desktop-host/tests/source-update-health.spec.ts
 @@ -0,0 +1,38 @@
@@ -146,59 +146,92 @@ index 0000000000000000000000000000000000000000..6927708b210075cb5e061c454bf41994
 +  })
 +})
 diff --git a/apps/desktop/README.i18n.yaml b/apps/desktop/README.i18n.yaml
-index 6060f79da9559469cbb2f346d124c257e10796df..4baa3f1adaa4a31ab322709130d32fdfe4748466 100644
+index 6060f79d..06926623 100644
 --- a/apps/desktop/README.i18n.yaml
 +++ b/apps/desktop/README.i18n.yaml
+@@ -45,8 +45,8 @@
+   en: fe6d23e6a3d3bc66
+   zh: d60c8d3a55747916
+ /deepseek-harness-desktop/develop/startup-onboarding:
+-  en: a51346b8d880ddba
+-  zh: 7913214c1c66063c
++  en: 78bc4e15a967d55e
++  zh: 098893a85aee3bf2
+ /deepseek-harness-desktop/develop/welcome-window-appearance:
+   en: 617a89aeb28131b9
+   zh: 4d84bd5d86501c86
 @@ -59,6 +59,9 @@
  /deepseek-harness-desktop/updates:
    en: 4788b6b60489ef92
    zh: 6312c5590efa27f1
 +/deepseek-harness-desktop/updates/local-source-updates:
-+  en: 813f77e02fcfe62e
-+  zh: 1f5099f1cbb1d16f
++  en: f978bd02170253c5
++  zh: 84072bfd266ba263
  /deepseek-harness-desktop/updates/local-desktop-settings:
    en: 2e57457c44c85b5f
    zh: 5b8510a3dc4c6c9d
 diff --git a/apps/desktop/README.md b/apps/desktop/README.md
-index e0bb92c5b788190d7ae04eb986c1087f7700b378..41cdb9230b8acf70ec4a2b5c46686b782a7efd63 100644
+index e0bb92c5..5be05743 100644
 --- a/apps/desktop/README.md
 +++ b/apps/desktop/README.md
-@@ -281,6 +281,14 @@ Confirmed Host exit without successful task teardown displays localized recovery
+@@ -210,6 +210,8 @@ Dependency installation does not run the locked Electron package's separate bina
+ 
+ ### Startup onboarding
+ 
++Native welcome RPC and account streams reuse the shell-owned cookie from the verified Host launch exchange. They do not depend on a Chromium cookie jar or a Host HTML index. The native HTTP transport binds requests to that Host authority and rejects redirects; no renderer receives its cookie.
++
+ The API-key input starts empty and uses `autocomplete="new-password"` to ask Chromium not to autofill saved login passwords.
+ 
+ Repeated launches and `dsh://open` keep the workspace hidden until the startup credential check or a welcome action permits entry. Entering from Welcome places keyboard focus on the document without selecting a sidebar control; Tab navigation remains available.
+@@ -281,6 +283,16 @@ Confirmed Host exit without successful task teardown displays localized recovery
  
  <a id="local-desktop-settings"></a>
  
 +### Local source updates
 +
-+Local builds carrying `dshSourceUpdater: true` use the installed `%LOCALAPPDATA%/DSH Source Updater/updater-config.json` helper configuration. The helper runs under an independent Node executable outside the application installation. Cold and second launches check published official `dsh-v*` releases, including prereleases; concurrent launches share one build and no periodic release polling runs.
++Local builds carrying `dshSourceUpdater: true` resolve an explicit `DSH_SOURCE_UPDATER_CONFIG`, then `DSHUpdater/updater-config.json` under the Windows Documents folder, then the legacy `%LOCALAPPDATA%/DSH Source Updater/updater-config.json`. The helper runs under an independent Node executable outside the application installation. Cold and second launches check published official `dsh-v*` releases, including prereleases; concurrent launches share one build and no periodic release polling runs.
 +
 +The helper builds a fixed release commit with the saved source patch and plugin compatibility checks. An incompatible patch or plugin retains the current installation and opens a warning. The application menu's Source Update Status command displays the current result and offers Retry. Missing helper files leave ordinary application startup available.
 +
-+Installation requires saved drafts, sixty seconds without application input, and no running tasks, approval waits, queued messages or background jobs. The Host drains admitted requests and stops gracefully before the helper snapshots the application, Harness home and Electron data. Qualification runs against isolated data with schedules and user admission disabled; matching program and data snapshots remain available for rollback. Packaged mandatory-update policy remains active independently of this local source-update path.
++Installation requires saved drafts, sixty seconds without application input, and no running tasks, approval waits, queued messages or background jobs. Before stopping the Host, a read-only preflight rechecks the candidate, installer, paths and current plugin selection. Missing, added or changed plugins block installation without restoring old plugins. The Host then drains admitted requests and stops gracefully before the helper snapshots the application, Harness home and Electron data. Qualification runs against isolated data with schedules and user admission disabled; matching program and data snapshots remain available for rollback. Packaged mandatory-update policy remains active independently of this local source-update path.
++
++A failed handoff clears the pending switch and stops automatic retries, including repeated opens of the running application. Explicit Retry starts a fresh check. Detached installation output is retained in private per-request logs, and acceptance must match the spawned worker PID. A live, unverified helper or failed Host recovery requires local inspection before retrying; the application does not restore a competing Host or quit to authorize an uncertain installation.
 +
  ### Local desktop settings
  
  The [shell configuration decision](../../.agents/notes/implemented/architecture/2026-10-08-desktop-shell-configuration.md) defines Host-independent ownership and the criteria for evaluating existing settings for migration.
 diff --git a/apps/desktop/README.zh.md b/apps/desktop/README.zh.md
-index 430ac4ad3d02a32c77d95aa92b8367d6c59eeea1..cf10314f3e38ceb66dbcca4b38b12558c1fa0788 100644
+index 430ac4ad..9f7c4731 100644
 --- a/apps/desktop/README.zh.md
 +++ b/apps/desktop/README.zh.md
-@@ -281,6 +281,14 @@ Windows 下载完成后的更新确认说明应用会在安装期间关闭、完
+@@ -210,6 +210,8 @@ Web 侧的对应命令是 `pnpm run dev:web` 与 `pnpm run start:web`，见[开
+ 
+ ### 启动引导
+ 
++原生欢迎页 RPC 和账户事件流复用壳层经过 Host 启动交换验证的认证 cookie，不依赖 Chromium cookie 存储或 Host 的 HTML 入口。原生 HTTP 传输固定到该 Host 地址并拒绝重定向；不会将 cookie 交给渲染器。
++
+ API Key 输入框初始为空，并通过 `autocomplete="new-password"` 请求 Chromium 不要自动填入已保存的登录密码。
+ 
+ 重复启动和 `dsh://open` 会保持工作区隐藏，直到启动凭据检查或欢迎页操作允许进入。从 Welcome 进入时，键盘焦点落在文档上，不选中侧边栏控件；Tab 导航仍可使用。
+@@ -281,6 +283,16 @@ Windows 下载完成后的更新确认说明应用会在安装期间关闭、完
  
  <a id="local-desktop-settings"></a>
  
 +### 本地源码更新
 +
-+带有 `dshSourceUpdater: true` 标记的本地构建使用已安装的 `%LOCALAPPDATA%/DSH Source Updater/updater-config.json` 助手配置。助手通过应用安装目录外的独立 Node 可执行文件运行。冷启动和再次启动时检查官方已发布的 `dsh-v*` 版本，包括预发布版本；并发启动共享同一次构建，不定期轮询新版本。
++带有 `dshSourceUpdater: true` 标记的本地构建依次查找显式的 `DSH_SOURCE_UPDATER_CONFIG`、Windows“文档”目录下的 `DSHUpdater/updater-config.json`，以及旧的 `%LOCALAPPDATA%/DSH Source Updater/updater-config.json`。助手通过应用安装目录外的独立 Node 可执行文件运行。冷启动和再次启动时检查官方已发布的 `dsh-v*` 版本，包括预发布版本；并发启动共享同一次构建，不定期轮询新版本。
 +
 +助手以固定发布提交、保存的源码补丁和插件兼容检查构建客户端。补丁或插件不兼容时保留当前安装并显示提示。应用菜单的“源码更新状态”显示当前结果并提供重试入口。助手文件缺失时，应用仍可正常启动。
 +
-+安装要求草稿已保存、应用连续六十秒无输入，且没有运行任务、待审批、排队消息或后台作业。Host 排空已接收请求并正常停止后，助手备份应用、Harness 数据目录和 Electron 数据。验证使用隔离数据并关闭调度及用户请求入口；保留相互匹配的程序和数据快照用于回退。打包的强制更新策略独立于本地源码更新流程继续生效。
++安装要求草稿已保存、应用连续六十秒无输入，且没有运行任务、待审批、排队消息或后台作业。停止 Host 前，只读预检重新验证候选版本、安装包、路径和当前插件选择；插件移除、新增或变更都会阻止安装，不会自动恢复旧插件。随后 Host 排空已接收请求并正常停止，助手备份应用、Harness 数据目录和 Electron 数据。验证使用隔离数据并关闭调度及用户请求入口；保留相互匹配的程序和数据快照用于回退。打包的强制更新策略独立于本地源码更新流程继续生效。
++
++交接失败会清除待切换状态并停止自动重试，再次打开运行中的应用也不会恢复重试。“重试”按钮才会发起新的检查。独立安装进程保留每次请求的私有输出日志，接受回执必须匹配实际启动的进程 PID。助手仍在运行、交接结果不明或 Host 恢复失败时，必须先检查本地状态；应用不会恢复一个竞争写入的 Host，也不会通过退出来授权结果不明的安装。
 +
  ### 本地桌面设置
  
  [壳层配置决策](../../.agents/notes/implemented/architecture/2026-10-08-desktop-shell-configuration.zh.md)说明独立于 Host 的配置归属，以及评估现有设置迁移的标准。
 diff --git a/apps/desktop/scripts/electron-builder-config.mjs b/apps/desktop/scripts/electron-builder-config.mjs
-index 4b9cd27a8d5c1eee9219cfc9ca8b60b1c2562deb..3d490e87690b64016310cfd2b366c2508f7ff1ac 100644
+index 4b9cd27a..3d490e87 100644
 --- a/apps/desktop/scripts/electron-builder-config.mjs
 +++ b/apps/desktop/scripts/electron-builder-config.mjs
 @@ -107,6 +107,7 @@ export function createElectronBuilderConfig(
@@ -210,7 +243,7 @@ index 4b9cd27a8d5c1eee9219cfc9ca8b60b1c2562deb..3d490e87690b64016310cfd2b366c250
        dshDesktopUpdateChannel: update?.channel ?? 'nightly',
        ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),
 diff --git a/apps/desktop/scripts/smoke-packaged-runtime.ts b/apps/desktop/scripts/smoke-packaged-runtime.ts
-index 6c3c12c8572593a1f038ed39f4ff3da898cecf70..8e849ace1a648880e6a8e29732df7f0a4c49ef98 100644
+index 6c3c12c8..8e849ace 100644
 --- a/apps/desktop/scripts/smoke-packaged-runtime.ts
 +++ b/apps/desktop/scripts/smoke-packaged-runtime.ts
 @@ -1,5 +1,7 @@
@@ -254,7 +287,7 @@ index 6c3c12c8572593a1f038ed39f4ff3da898cecf70..8e849ace1a648880e6a8e29732df7f0a
 +  await rm(absolute, { recursive: true })
 +}
 diff --git a/apps/desktop/scripts/test-host-updates.ts b/apps/desktop/scripts/test-host-updates.ts
-index ba0a63b8f6d8977c4c4c45d0f233b5b3ddceda76..940edfa056d80f5533b97cb49e5eff872c8b4728 100644
+index ba0a63b8..940edfa0 100644
 --- a/apps/desktop/scripts/test-host-updates.ts
 +++ b/apps/desktop/scripts/test-host-updates.ts
 @@ -27,6 +27,9 @@ try {
@@ -267,8 +300,21 @@ index ba0a63b8f6d8977c4c4c45d0f233b5b3ddceda76..940edfa056d80f5533b97cb49e5eff87
      { id: 'agent-instructions', disabled: true },
      { id: 'agent-preset-registry', config: { default: 'standard' } },
      { insert: [{ id: 'update-qualification', name: new URL('../tests/fixtures/host-update-control.mjs', import.meta.url).href }] },
+diff --git a/apps/desktop/src/account-backend.ts b/apps/desktop/src/account-backend.ts
+index 862b8f81..7803bdeb 100644
+--- a/apps/desktop/src/account-backend.ts
++++ b/apps/desktop/src/account-backend.ts
+@@ -80,7 +80,7 @@ export interface DesktopAccountBackend {
+  * Connect native account operations to the standard authenticated Web backend.
+  * @param origin - Host Web origin.
+  * @param invoke - validated unary RPC caller.
+- * @param cookies - Electron session cookie reader.
++ * @param cookies - Shell-owned authenticated Host cookie reader.
+  * @returns account operations; watch callers own their subscriptions.
+  */
+ export function desktopAccountBackend(origin: string, invoke: AccountInvoke, cookies: () => Promise<string>): DesktopAccountBackend {
 diff --git a/apps/desktop/src/ipc.ts b/apps/desktop/src/ipc.ts
-index fc19021fa6047bf5ef2a1c5e65c510adda71ee08..8cff66803f7dad5b8438cea03c3bc2731336dd3c 100644
+index fc19021f..8cff6680 100644
 --- a/apps/desktop/src/ipc.ts
 +++ b/apps/desktop/src/ipc.ts
 @@ -31,6 +31,7 @@ export const DESKTOP_IPC = {
@@ -280,10 +326,10 @@ index fc19021fa6047bf5ef2a1c5e65c510adda71ee08..8cff66803f7dad5b8438cea03c3bc273
  
  /** Desktop release update state rendered by desktop-owned UI. */
 diff --git a/apps/desktop/src/locale.ts b/apps/desktop/src/locale.ts
-index 5d9d4607c7d046006cb91d0ef41e5f7ba193b435..049a39399bd753cf1bd02dbac07f9a07d43c0cab 100644
+index 5d9d4607..59173a26 100644
 --- a/apps/desktop/src/locale.ts
 +++ b/apps/desktop/src/locale.ts
-@@ -1,6 +1,11 @@
+@@ -1,6 +1,13 @@
  /** Typed English and Chinese copy owned by the Electron shell. */
  
  export const en = {
@@ -292,10 +338,12 @@ index 5d9d4607c7d046006cb91d0ef41e5f7ba193b435..049a39399bd753cf1bd02dbac07f9a07
 +  sourceUpdateBuild: 'Unsigned source build. Published alpha, beta, rc and stable releases are checked each time you open the app.',
 +  sourceUpdateRetry: 'Retry update check',
 +  sourceUpdateBlocked: 'The source update is blocked. Your current version remains available.',
++  sourceUpdateFailed: 'Automatic source installation has stopped. Review the details before retrying manually.',
++  sourceUpdateRecoveryRequired: 'The update or Host recovery outcome is uncertain. Automatic installation is stopped; inspect the local updater before restarting or retrying.',
    cliCommandMenu: 'Manage dsh Command…',
    cliCommandTitle: 'Manage dsh Command',
    cliCommandLocation: 'Desktop command: {path}',
-@@ -172,6 +177,11 @@ export const en = {
+@@ -172,6 +179,13 @@ export const en = {
  export type DesktopMessages = { readonly [Key in keyof typeof en]: string }
  
  export const zh = {
@@ -304,11 +352,13 @@ index 5d9d4607c7d046006cb91d0ef41e5f7ba193b435..049a39399bd753cf1bd02dbac07f9a07
 +  sourceUpdateBuild: '本地未签名源码构建。每次打开应用时检查已发布的 alpha、beta、rc 和正式版本。',
 +  sourceUpdateRetry: '重试更新检查',
 +  sourceUpdateBlocked: '源码更新暂时无法继续，当前版本仍可正常使用。',
++  sourceUpdateFailed: '源码更新已停止自动切换。请查看详情后手动重试。',
++  sourceUpdateRecoveryRequired: '更新交接或运行时恢复结果不明，已停止自动安装。请先检查本地更新状态，再重启或重试。',
    cliCommandMenu: '管理 dsh 命令…',
    cliCommandTitle: '管理 dsh 命令',
    cliCommandLocation: 'Desktop 命令：{path}',
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c50b56f1b 100644
+index 2afdfd71..32fc847e 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
 @@ -3,7 +3,7 @@ import { WINDOWS_TITLEBAR_HEIGHT } from './windows-layout.ts'
@@ -320,11 +370,34 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
  import { fileURLToPath } from 'node:url'
  import {
    app,
-@@ -61,6 +61,15 @@ import { DesktopUpdateOverlays } from './update-overlay.ts'
+@@ -15,7 +15,6 @@ import {
+   powerMonitor,
+   nativeImage,
+   nativeTheme,
+-  net,
+   protocol,
+   session,
+   shell,
+@@ -36,12 +35,12 @@ import { claimDesktopSingleInstance } from './single-instance.ts'
+ import { desktopUpdateChannel } from './update-channel.ts'
+ import { DesktopUpdateCoordinator } from './update-coordinator.ts'
+ import { DesktopCommandManager } from './command-management.ts'
+-import { serveWebDocument, authenticateWebHost, forwardWebRequest } from './web-document.ts'
++import { serveWebDocument, authenticateWebHost, authenticatedHostTransport, forwardWebRequest } from './web-document.ts'
+ import { DesktopFatalRecovery } from './fatal-recovery.ts'
+ import { pruneCrashReports, RendererConsoleTail, writeCrashReport, type CrashReportSource } from './crash-report.ts'
+ import { openWelcomeWindow } from './welcome-window.ts'
+ import { WELCOME_IPC, needsWelcome, type WelcomeNotice } from './welcome-api.ts'
+-import { connectDesktopWelcome, type DesktopWelcomeBackend } from './welcome-backend.ts'
++import { authenticatedDesktopWelcome, type DesktopWelcomeBackend } from './welcome-backend.ts'
+ import { DesktopUpdateJournal } from './update-journal.ts'
+ import { DesktopUpdatePreparationError } from './update-error.ts'
+ import { DesktopUpdateSchedule, resolveDesktopUpdateScheduleConfig } from './update-schedule.ts'
+@@ -61,6 +60,15 @@ import { DesktopUpdateOverlays } from './update-overlay.ts'
  import { DesktopQuitConfirmation } from './quit-confirmation.ts'
  import { DesktopTray } from './tray.ts'
  import { DesktopBackgroundNotice } from './background-notice.ts'
-+import { DesktopSourceUpdater, desktopSourceUpdaterPaths, runDesktopSourceWorker } from './source-updater.ts'
++import { DesktopSourceHandoffError, DesktopSourceUpdater, desktopSourceUpdaterPaths, runDesktopSourceWorker } from './source-updater.ts'
 +import { readDesktopSourceHealthRequest, desktopSourceHealthPluginVersions, awaitDesktopSourceHealthRelease } from './source-update-health.ts'
 +
 +const sourceHealth = readDesktopSourceHealthRequest(process.argv)
@@ -336,7 +409,17 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
  
  let focusPrimaryWindow = (): void => {}
  let stopForRecovery = async (): Promise<void> => {}
-@@ -586,6 +595,108 @@ async function main(): Promise<void> {
+@@ -455,7 +463,8 @@ async function main(): Promise<void> {
+         hostUrl = ready.url
+         if (ready.injections === undefined) throw new Error('Desktop Host did not provide boot injections')
+         injections = ready.injections
+-        welcomeBackend = await connectDesktopWelcome(ready.url, (input, init) => net.fetch(input, init), async () => (await session.defaultSession.cookies.get({ url: ready.url })).map(cookie => `${cookie.name}=${cookie.value}`).join('; '))
++        const nativeHostCookie = hostCookie
++        welcomeBackend = authenticatedDesktopWelcome(ready.url, authenticatedHostTransport(ready.url, nativeHostCookie), () => Promise.resolve(nativeHostCookie))
+         analyticsEnabled = await welcomeBackend.analyticsEnabled().catch(() => false)
+         if (!reportedLaunch) { reportedLaunch = true; void track('desktop_app_launch', {}) }
+         stopAccount?.()
+@@ -586,6 +595,125 @@ async function main(): Promise<void> {
  
    const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
    const updateChannel = desktopUpdateChannel(manifest)
@@ -358,14 +441,18 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
 +  const sourcePolicyPending = (): boolean => isMandatory() || mandatoryPolicy?.state.checking === true
 +  const sourceDraftsSaved = (): boolean => !sourceDraftPersistenceFailed
 +  const recoverSourceInstall = async (): Promise<void> => {
-+    sourceInputBlocked = false
 +    shellInstallerOwnsQuit = false
 +    requireCleanStop = false
-+    updateStoppedHost = false
 +    if (quitting) return
-+    await backend.start(prepareHostEnvironment)
-+    navigation = undefined
-+    await navigateMain(applicationUrl)
++    try {
++      await backend.start(prepareHostEnvironment)
++      navigation = undefined
++      await navigateMain(applicationUrl)
++    } catch (error) {
++      throw new DesktopSourceHandoffError('unknown', `source updater: Host recovery failed; inspect before retrying. ${error instanceof Error ? error.message : String(error)}`)
++    }
++    updateStoppedHost = false
++    sourceInputBlocked = false
 +  }
 +  if (sourcePaths !== undefined) {
 +    sourceUpdater = new DesktopSourceUpdater({
@@ -373,6 +460,15 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
 +        installDir: dirname(process.execPath), userDataDir: app.getPath('userData'), sharedDataDir: dirname(dirname(paths.profile)) },
 +      run: (action, request, detached) => runDesktopSourceWorker(resources.node, sourcePaths, action, request, detached),
 +      idleMilliseconds: sourceIdleMilliseconds,
++      inspectInstall: async () => {
++        if (quitting || recovery.active || sourcePolicyPending() || updateDialog.isOpen
++          || !sourceDraftsSaved() || !sourceRendererSeen || sourceIdleMilliseconds() < 60_000
++          || startup !== undefined || workspaceRecovery !== undefined) return false
++        const host = backend.host
++        if (host === undefined || mainWindow === undefined || mainWindow.isDestroyed()) return false
++        await commandManager.idle()
++        return !await host.updateTasks('inspect')
++      },
 +      prepareInstall: async () => {
 +        if (quitting || recovery.active || sourcePolicyPending()
 +          || updateDialog.isOpen || !sourceDraftsSaved() || !sourceRendererSeen
@@ -416,9 +512,11 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
 +      quit: () => { shellInstallerOwnsQuit = true; quitWithoutConfirmation() },
 +      publish: (state) => {
 +        console.info('desktop source update:', state.phase, state.detail ?? '')
-+        if (state.phase === 'blocked') {
++        if (['blocked', 'failed', 'rolled-back', 'recovery-required'].includes(state.phase)) {
 +          void ordinaryMessageBox({ type: 'warning', title: locale.messages.sourceUpdateTitle,
-+            message: locale.messages.sourceUpdateBlocked, detail: state.detail ?? '',
++            message: state.phase === 'recovery-required' ? locale.messages.sourceUpdateRecoveryRequired
++              : state.phase === 'blocked' ? locale.messages.sourceUpdateBlocked : locale.messages.sourceUpdateFailed,
++            detail: state.detail ?? '',
 +            buttons: [locale.messages.updateAcknowledge], cancelId: 0 }).catch((error: unknown) => { console.error(error) })
 +        }
 +      },
@@ -436,16 +534,18 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
 +  const showSourceUpdateStatus = async (): Promise<void> => {
 +    if (sourceUpdater === undefined) return
 +    const state = sourceUpdater.state
++    const canRetry = state.phase !== 'recovery-required'
 +    const result = await ordinaryMessageBox({ type: 'info', title: locale.messages.sourceUpdateTitle,
 +      message: locale.messages.sourceUpdateStatus,
 +      detail: `${locale.messages.sourceUpdateBuild}\n${state.phase}${state.target === undefined ? '' : `: ${state.target.version}`}\n${state.detail ?? ''}`,
-+      buttons: [locale.messages.sourceUpdateRetry, locale.messages.updateAcknowledge], cancelId: 1 })
-+    if (result.response === 0) void sourceUpdater.launch()
++      buttons: canRetry ? [locale.messages.sourceUpdateRetry, locale.messages.updateAcknowledge] : [locale.messages.updateAcknowledge],
++      cancelId: canRetry ? 1 : 0 })
++    if (canRetry && result.response === 0) void sourceUpdater.launch(true)
 +  }
    const updates = new DesktopUpdateCoordinator(
      publishUpdate,
      async () => {
-@@ -800,6 +911,7 @@ async function main(): Promise<void> {
+@@ -800,6 +928,7 @@ async function main(): Promise<void> {
    let promptOperation: Promise<void> | undefined
    let policyAuthenticationQueued = false
    const openUpdatePrompt = (manual = false): Promise<void> => {
@@ -453,7 +553,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
      if (authenticationOperation !== undefined) {
        policyAuth?.focus(); updateDialog.focus()
      }
-@@ -920,6 +1032,7 @@ async function main(): Promise<void> {
+@@ -920,6 +1049,7 @@ async function main(): Promise<void> {
  
    const automaticCheck = (): void => {
      if (!quitting) void mandatoryPolicy?.check('foreground-or-resume').catch((error: unknown) => { console.error(error) })
@@ -461,7 +561,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
      if (!quitting) void updateSchedule.check().catch((error: unknown) => { console.error(error) })
    }
    powerMonitor.on('resume', automaticCheck)
-@@ -960,6 +1073,8 @@ async function main(): Promise<void> {
+@@ -960,6 +1090,8 @@ async function main(): Promise<void> {
        : { label: currentDesktopLocale().messages.aboutMenu, role: 'about' },
      { type: 'separator' },
      { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
@@ -470,7 +570,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
      ...process.platform === 'darwin' || process.platform === 'win32'
        ? [{ label: currentDesktopLocale().messages.cliCommandMenu, click: () => { void commandManager.show() } }] : [],
      ...development ? [
-@@ -1075,6 +1190,20 @@ async function main(): Promise<void> {
+@@ -1075,6 +1207,20 @@ async function main(): Promise<void> {
      browserGuests.bind(window, (guest, name) => shortcuts.attachGuest(window, guest, name))
      shortcuts.attach(window)
      window.on('focus', automaticCheck)
@@ -491,7 +591,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
      // Closing hides: the page and the Host keep running, and the next show resumes the same document.
      window.on('close', (event) => {
        if (quitting || shellInstallerOwnsQuit || sessionEnding) return
-@@ -1330,6 +1459,7 @@ async function main(): Promise<void> {
+@@ -1330,6 +1476,7 @@ async function main(): Promise<void> {
      }).catch((error: unknown) => { console.error(error) })
    }
    automaticCheck()
@@ -499,7 +599,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
    await reconcileBackend().catch(() => undefined)
    // Window lifecycle callbacks run while backend startup is pending.
    if (isQuitting()) return
-@@ -1342,9 +1472,35 @@ async function main(): Promise<void> {
+@@ -1342,9 +1489,35 @@ async function main(): Promise<void> {
  
  const ownsDesktopInstance = claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
  
@@ -537,7 +637,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..5748c15d7ddf0c5cbbb05eefc045be2c
    if (diagnosticFile !== undefined) {
      await writeFile(diagnosticFile, `${error instanceof Error ? error.stack ?? message : message}\n`).catch(() => undefined)
 diff --git a/apps/desktop/src/preload-app.ts b/apps/desktop/src/preload-app.ts
-index f590b8bc8b80a6ee007a0f36249097c77fb0b974..d49447ada62b44645ce1269c0e9c95ff6a2d0836 100644
+index f590b8bc..d49447ad 100644
 --- a/apps/desktop/src/preload-app.ts
 +++ b/apps/desktop/src/preload-app.ts
 @@ -59,6 +59,18 @@ function createProductApi(): DshDesktopProductApi {
@@ -561,7 +661,7 @@ index f590b8bc8b80a6ee007a0f36249097c77fb0b974..d49447ada62b44645ce1269c0e9c95ff
      setActive: (active: boolean) => { ipcRenderer.send(DESKTOP_IPC.onboardingActive, active) },
 diff --git a/apps/desktop/src/source-update-health.ts b/apps/desktop/src/source-update-health.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..490d18ace4c766d201c174c5bcd6c729e07a4597
+index 00000000..490d18ac
 --- /dev/null
 +++ b/apps/desktop/src/source-update-health.ts
 @@ -0,0 +1,107 @@
@@ -674,10 +774,10 @@ index 0000000000000000000000000000000000000000..490d18ace4c766d201c174c5bcd6c729
 +}
 diff --git a/apps/desktop/src/source-updater.ts b/apps/desktop/src/source-updater.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc25950c5c
+index 00000000..e6bbcdef
 --- /dev/null
 +++ b/apps/desktop/src/source-updater.ts
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,408 @@
 +/** Launch-triggered source updates; installation admission stays with the running Desktop owner. */
 +
 +import { spawn } from 'node:child_process'
@@ -699,6 +799,27 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +  readonly target?: DesktopSourceTarget
 +  readonly detail?: string
 +  readonly [key: string]: unknown
++}
++
++/** Worker operations; preflight reads the current installation before Host shutdown. */
++export type DesktopSourceUpdateAction = 'check' | 'prepare' | 'preflight' | 'apply' | 'status'
++
++/** A live or unverified helper must not race a restored Host or another installation attempt. */
++export class DesktopSourceHandoffError extends Error {
++  /** @param outcome - Rejected means the helper exited before Desktop quit; unknown requires local inspection.
++   * @param message - Private, actionable worker diagnostics.
++   */
++  constructor(readonly outcome: 'rejected' | 'unknown', message: string) { super(message) }
++}
++
++async function workerOutputTail(filename: string): Promise<string> {
++  const file = await open(filename, 'r')
++  try {
++    const size = (await file.stat()).size
++    const buffer = Buffer.alloc(Math.min(size, 16_384))
++    const { bytesRead } = await file.read(buffer, 0, buffer.length, Math.max(0, size - buffer.length))
++    return buffer.subarray(0, bytesRead).toString('utf8')
++  } finally { await file.close() }
 +}
 +
 +/** Local helper paths; an absent configuration leaves ordinary Desktop startup usable. */
@@ -757,11 +878,11 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 + * @param paths - Installed worker and configuration.
 + * @param action - Worker operation.
 + * @param request - Main-process-owned request fields.
-+ * @param detached - Apply uses its existing durable acceptance handshake. Checks and builds always detach with file-backed output; status uses short-lived pipes.
++ * @param detached - Apply uses a PID-bound durable acceptance handshake and retains private output files. Checks and builds detach with file-backed output; status and preflight use pipes.
 + * @returns Worker JSON, or an acknowledged detached apply launch.
 + */
 +export async function runDesktopSourceWorker(
-+  executable: string, paths: DesktopSourceUpdaterPaths, action: 'check' | 'prepare' | 'apply' | 'status',
++  executable: string, paths: DesktopSourceUpdaterPaths, action: DesktopSourceUpdateAction,
 +  request: object, detached = false,
 +): Promise<DesktopSourceUpdateState> {
 +  const config: unknown = JSON.parse(await readFile(paths.config, 'utf8'))
@@ -784,7 +905,7 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +  } else arguments_.push('--request', JSON.stringify(request))
 +  const independent = !detached && (action === 'check' || action === 'prepare')
 +  const outputBase = join(dirname(paths.config), `${action}-${randomUUID()}`)
-+  const files = independent ? await (async () => {
++  const files = independent || detached ? await (async () => {
 +    const stdout = `${outputBase}.stdout.log`
 +    const stderr = `${outputBase}.stderr.log`
 +    const output = await open(stdout, 'wx', 0o600)
@@ -796,7 +917,7 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +  try {
 +    child = spawn(config.tools.node.executable, arguments_, {
 +      env: { ...environment, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, detached: detached || independent,
-+      stdio: detached ? 'ignore' : files === undefined ? ['ignore', 'pipe', 'pipe'] : ['ignore', files.output.fd, files.diagnostic.fd],
++      stdio: files === undefined ? ['ignore', 'pipe', 'pipe'] : ['ignore', files.output.fd, files.diagnostic.fd],
 +    })
 +  } catch (error) {
 +    if (files !== undefined) {
@@ -811,16 +932,34 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +      reject(new Error('source updater: observation deadline exceeded; detached worker continues independently'))
 +    }, 8 * 60 * 60 * 1_000) : undefined
 +    const finishObservation = (): void => { if (observation !== undefined) clearTimeout(observation) }
-+    child.once('error', (error) => { completed = true; finishObservation(); reject(error) })
++    child.once('error', (error) => {
++      completed = true; finishObservation()
++      reject(detached ? new DesktopSourceHandoffError(child.pid === undefined ? 'rejected' : 'unknown', error.message) : error)
++    })
 +    if (independent) child.once('spawn', () => { child.unref() })
 +    if (detached) {
++      let exited = false
++      let exitCode: number | null = null
++      child.once('exit', (code) => { completed = true; exited = true; exitCode = code })
 +      child.once('spawn', () => {
 +        void (async () => {
-+          if (acceptance === undefined) throw new Error('source updater: handoff receipt unavailable')
-+          let exited: Error | undefined
-+          child.once('exit', (code) => { exited = new Error(`source updater: install helper exited before accepting (${String(code)})`) })
++          if (acceptance === undefined || files === undefined) throw new DesktopSourceHandoffError('unknown', 'source updater: handoff receipt unavailable')
 +          const deadline = Date.now() + 20_000
 +          while (Date.now() < deadline) {
++            if (exited) {
++              const output = await workerOutputTail(files.stdout)
++              const diagnostic = await workerOutputTail(files.stderr)
++              let detail = ''
++              try {
++                const state = parseDesktopSourceUpdateState(JSON.parse(output.trim().split(/\r?\n/u).at(-1) ?? '') as unknown)
++                detail = state.detail ?? ''
++              } catch (error) {
++                // Startup failures may emit only stderr, before worker JSON exists.
++                if (!(error instanceof Error)) throw error
++              }
++              throw new DesktopSourceHandoffError('rejected',
++                `source updater: install helper exited before accepting (${String(exitCode)}). ${detail || diagnostic}\nLog: ${files.stderr}`)
++            }
 +            let receipt: unknown
 +            try { receipt = JSON.parse(await readFile(acceptance.path, 'utf8')) as unknown }
 +            catch (error) {
@@ -828,16 +967,22 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +            }
 +            if (receipt !== undefined) {
 +              if (typeof receipt !== 'object' || receipt === null || !('token' in receipt) || receipt.token !== acceptance.token
-+                || !('accepted' in receipt) || receipt.accepted !== true) throw new Error('source updater: invalid install helper acceptance')
++                || !('accepted' in receipt) || receipt.accepted !== true
++                || !('schemaVersion' in receipt) || receipt.schemaVersion !== 1
++                || !('workerPid' in receipt) || receipt.workerPid !== child.pid) {
++                throw new DesktopSourceHandoffError('unknown', 'source updater: invalid install helper acceptance; inspect the helper before retrying')
++              }
 +              child.unref()
 +              resolve({ phase: 'applying' })
 +              return
 +            }
-+            if (exited !== undefined) throw exited
 +            await new Promise<void>((wait) => { setTimeout(wait, 100) })
 +          }
-+          throw new Error('source updater: install helper did not accept the handoff')
-+        })().catch((error: unknown) => { reject(error instanceof Error ? error : new Error(String(error))) })
++          throw new DesktopSourceHandoffError('unknown', `source updater: install helper did not accept the handoff; inspect the still-running helper before retrying\nLog: ${files.stderr}`)
++        })().catch((error: unknown) => {
++          reject(error instanceof DesktopSourceHandoffError ? error
++            : new DesktopSourceHandoffError('unknown', error instanceof Error ? error.message : String(error)))
++        })
 +      })
 +      return
 +    }
@@ -869,15 +1014,16 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +    if (files === undefined) return
 +    await Promise.all([files.output.close(), files.diagnostic.close()])
 +    // A cancelled observer leaves the running worker's files intact; a parent exit never reaches this cleanup.
-+    if (completed) await Promise.all([unlink(files.stdout), unlink(files.stderr)])
++    if (completed && !detached) await Promise.all([unlink(files.stdout), unlink(files.stderr)])
 +  })
 +}
 +
 +/** Desktop-owned collaborators; unknown work or unsaved drafts refuse installation. */
 +export interface DesktopSourceUpdaterOptions {
 +  readonly request: object
-+  readonly run: (action: 'check' | 'prepare' | 'apply' | 'status', request: object, detached?: boolean) => Promise<DesktopSourceUpdateState>
++  readonly run: (action: DesktopSourceUpdateAction, request: object, detached?: boolean) => Promise<DesktopSourceUpdateState>
 +  readonly idleMilliseconds: () => number
++  readonly inspectInstall: () => Promise<boolean>
 +  readonly prepareInstall: () => Promise<boolean>
 +  readonly recoverInstall: () => Promise<void>
 +  readonly quit: () => void
@@ -890,6 +1036,7 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +  private admissionPending: Promise<void> | undefined
 +  private timer: ReturnType<typeof setTimeout> | undefined
 +  private disposed = false
++  private switchBlocked = false
 +  private ready: DesktopSourceUpdateState | undefined
 +  private snapshot: DesktopSourceUpdateState = { phase: 'idle' }
 +
@@ -901,14 +1048,24 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +
 +  /**
 +   * Check once on a cold or second launch; concurrent launches join existing work.
-+   * @returns Completion of the observed check and optional background build.
++   * @param manualRetry - Explicit status-dialog action may retry a rejected update; opening the app cannot clear a failure latch.
++   * @returns Completion of the observed check and optional background build. Uncertain handoffs require local inspection.
 +   */
-+  launch(): Promise<void> {
++  launch(manualRetry = false): Promise<void> {
 +    if (this.disposed) return Promise.resolve()
 +    if (this.pending !== undefined) return this.pending
 +    if (this.admissionPending !== undefined) return this.admissionPending
++    if (this.snapshot.phase === 'recovery-required') return Promise.resolve()
++    if (this.switchBlocked && !manualRetry) return Promise.resolve()
++    if (manualRetry) {
++      this.switchBlocked = false
++      this.ready = undefined
++      if (this.timer !== undefined) clearTimeout(this.timer)
++      this.timer = undefined
++    }
 +    if (this.ready !== undefined) { this.scheduleAdmission(); return Promise.resolve() }
-+    const pending = this.check().catch((error: unknown) => {
++    const pending = this.check(manualRetry).catch((error: unknown) => {
++      this.switchBlocked = true
 +      this.publish({ phase: 'failed', detail: error instanceof Error ? error.message : String(error) })
 +    }).finally(() => { if (this.pending === pending) this.pending = undefined })
 +    this.pending = pending
@@ -929,9 +1086,9 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +
 +  private isDisposed(): boolean { return this.disposed }
 +
-+  private async check(): Promise<void> {
++  private async check(manualRetry: boolean): Promise<void> {
 +    this.publish({ phase: 'checking' })
-+    let checked = await this.options.run('check', this.options.request)
++    let checked = await this.options.run('check', { ...this.options.request, manualRetry })
 +    while (!this.isDisposed() && ['busy', 'building'].includes(checked.phase)) {
 +      this.publish(checked)
 +      await new Promise<void>((resolveWait) => { setTimeout(resolveWait, 1_000) })
@@ -940,12 +1097,15 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +    }
 +    if (this.isDisposed()) return
 +    this.publish(checked)
-+    if (checked.phase !== 'available' && checked.phase !== 'ready') return
++    if (checked.phase !== 'available' && checked.phase !== 'ready') {
++      this.switchBlocked = ['failed', 'blocked', 'rolled-back', 'recovery-required'].includes(checked.phase)
++      return
++    }
 +    if (checked.target === undefined) throw new Error('source updater: release identity missing')
-+    const prepared = checked.phase === 'ready' ? checked : await this.options.run('prepare', { ...this.options.request, target: checked.target })
++    const prepared = checked.phase === 'ready' ? checked : await this.options.run('prepare', { ...this.options.request, target: checked.target, manualRetry })
 +    if (this.isDisposed()) return
 +    this.publish(prepared)
-+    if (prepared.phase !== 'ready') return
++    if (prepared.phase !== 'ready') { this.switchBlocked = true; return }
 +    if (prepared.target === undefined) throw new Error('source updater: prepared release identity missing')
 +    this.ready = prepared
 +    this.scheduleAdmission()
@@ -956,7 +1116,11 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +    this.timer = setTimeout(() => {
 +      this.timer = undefined
 +      const admission = this.admit().catch((error: unknown) => {
-+        this.publish({ phase: 'deferred', ...(this.ready?.target === undefined ? {} : { target: this.ready.target }),
++        const target = this.ready?.target
++        this.ready = undefined
++        this.switchBlocked = true
++        this.publish({ phase: error instanceof DesktopSourceHandoffError && error.outcome === 'unknown' ? 'recovery-required' : 'failed',
++          ...(target === undefined ? {} : { target }),
 +          detail: error instanceof Error ? error.message : String(error) })
 +      }).finally(() => {
 +        if (this.admissionPending === admission) this.admissionPending = undefined
@@ -975,6 +1139,23 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +      this.timer.unref()
 +      return
 +    }
++    if (!await this.options.inspectInstall() || this.options.idleMilliseconds() < 60_000) {
++      this.timer = setTimeout(() => { this.timer = undefined; this.scheduleAdmission() }, 10_000)
++      this.timer.unref()
++      return
++    }
++    const verified = await this.options.run('preflight', { ...this.options.request, target: ready.target })
++    if (this.isDisposed()) return
++    if (verified.phase !== 'ready') {
++      this.ready = undefined
++      this.switchBlocked = true
++      this.publish(verified)
++      return
++    }
++    if (verified.target?.commit !== ready.target.commit || verified.target.version !== ready.target.version) {
++      throw new Error('source updater: preflight returned a different release')
++    }
++    if (this.options.idleMilliseconds() < 60_000) return
 +    const admitted = await this.options.prepareInstall()
 +    if (this.isDisposed()) {
 +      if (admitted) await this.options.recoverInstall()
@@ -986,11 +1167,17 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +      return
 +    }
 +    try {
-+      await this.options.run('apply', { ...this.options.request, target: ready.target,
++      const accepted = await this.options.run('apply', { ...this.options.request, target: ready.target,
 +        admission: { hostStopped: true, draftsSaved: true, drained: true, idleMs: this.options.idleMilliseconds(),
 +          activeTasks: 0, pendingApprovals: 0, queuedMessages: 0, backgroundJobs: 0, admittedAt: new Date().toISOString() } }, true)
++      if (accepted.phase !== 'applying') throw new Error(accepted.detail ?? 'source updater: helper did not accept installation')
 +    } catch (error) {
-+      await this.options.recoverInstall()
++      if (!(error instanceof DesktopSourceHandoffError && error.outcome === 'unknown')) {
++        try { await this.options.recoverInstall() }
++        catch (recoveryError) {
++          throw new DesktopSourceHandoffError('unknown', `source updater: Host recovery failed; inspect before retrying. ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`)
++        }
++      }
 +      throw error
 +    }
 +    if (this.isDisposed()) return
@@ -999,8 +1186,69 @@ index 0000000000000000000000000000000000000000..a5e2d18457df678a291611209df328dc
 +    this.options.quit()
 +  }
 +}
+diff --git a/apps/desktop/src/web-document.ts b/apps/desktop/src/web-document.ts
+index a74ea7c7..1b544a4f 100644
+--- a/apps/desktop/src/web-document.ts
++++ b/apps/desktop/src/web-document.ts
+@@ -49,6 +49,25 @@ export async function authenticateWebHost(url: string): Promise<string> {
+   return end < 0 ? cookie : cookie.slice(0, end)
+ }
+ 
++/**
++ * Bind native HTTP requests to the already-authenticated owned Host, independently of Chromium's cookie jar.
++ * @param host - Host URL whose launch token was exchanged by authenticateWebHost.
++ * @param cookie - Cookie returned by that verified exchange; never exposed to a renderer.
++ * @returns Origin-bound HTTP sender; redirects and credential forwarding to another authority are refused.
++ */
++export function authenticatedHostTransport(host: string, cookie: string): (input: string, init?: RequestInit) => Promise<Response> {
++  const origin = new URL(host).origin
++  if (cookie === '') throw new Error('Desktop Host authentication cookie is missing')
++  return async (input, init) => {
++    const target = new URL(input)
++    if (target.origin !== origin || target.username || target.password) throw new Error('Desktop Host request authority differs')
++    const headers = new Headers(init?.headers)
++    for (const name of ['host', 'origin', 'cookie', 'sec-fetch-site']) headers.delete(name)
++    headers.set('cookie', cookie)
++    return fetch(target, { ...init, headers, redirect: 'error' })
++  }
++}
++
+ /**
+  * Response headers not relayed to the renderer. `set-cookie` would hand the
+  * Host's authentication cookie to the page's cookie jar, which the shell owns
+diff --git a/apps/desktop/src/welcome-backend.ts b/apps/desktop/src/welcome-backend.ts
+index 54ab46d8..e15b2934 100644
+--- a/apps/desktop/src/welcome-backend.ts
++++ b/apps/desktop/src/welcome-backend.ts
+@@ -45,10 +45,25 @@ export async function connectDesktopWelcome(
+   send: (input: string, init?: RequestInit) => Promise<Response>,
+   cookies: () => Promise<string> = () => Promise.resolve(''),
+ ): Promise<DesktopWelcomeBackend> {
+-  const origin = new URL(authenticatedUrl).origin
+   const authenticated = await send(authenticatedUrl, { credentials: 'include' })
+   await authenticated.body?.cancel()
+   if (!authenticated.ok) throw new Error('desktop welcome: Web authentication failed')
++  return authenticatedDesktopWelcome(authenticatedUrl, send, cookies)
++}
++
++/**
++ * Reuse the shell's verified Host authentication for native RPC; Desktop serves its HTML from its own scheme.
++ * @param hostUrl - Owned Host URL, previously authenticated by the shell.
++ * @param send - Origin-bound transport carrying the shell-owned Host cookie.
++ * @param cookies - The same verified cookie for the native account event stream.
++ * @returns Native operations; every request remains authenticated by the ordinary Host APIs.
++ */
++export function authenticatedDesktopWelcome(
++  hostUrl: string,
++  send: (input: string, init?: RequestInit) => Promise<Response>,
++  cookies: () => Promise<string>,
++): DesktopWelcomeBackend {
++  const origin = new URL(hostUrl).origin
+   const invoke = async (
+     request: { namespace: string; method: string; args: Record<string, unknown> },
+     signal?: AbortSignal,
 diff --git a/apps/desktop/tests/fixtures/host-update-qualification.mjs b/apps/desktop/tests/fixtures/host-update-qualification.mjs
-index 4d09d86a87aae8ebaa4fb69a633617393c2bae14..51cfc494378811b3d3f78d9c7bdbc32ed774dd67 100644
+index 4d09d86a..51cfc494 100644
 --- a/apps/desktop/tests/fixtures/host-update-qualification.mjs
 +++ b/apps/desktop/tests/fixtures/host-update-qualification.mjs
 @@ -164,7 +164,7 @@ try {
@@ -1012,9 +1260,31 @@ index 4d09d86a87aae8ebaa4fb69a633617393c2bae14..51cfc494378811b3d3f78d9c7bdbc32e
        let child
        let done
        const id = ctx.jobs.start({ kind: 'update-qualification', label: 'Private Node process waiting for stdin EOF', owner,
+diff --git a/apps/desktop/tests/main-startup.spec.ts b/apps/desktop/tests/main-startup.spec.ts
+index d9a8f310..7c3126b7 100644
+--- a/apps/desktop/tests/main-startup.spec.ts
++++ b/apps/desktop/tests/main-startup.spec.ts
+@@ -16,7 +16,7 @@ import { writeCrashReport } from '../src/crash-report.ts'
+ type InvokeEvent = { sender?: unknown; senderFrame: { url: string } }
+ type InvokeHandler = (event: InvokeEvent, ...args: unknown[]) => unknown
+ 
+-vi.mock('../src/web-document.ts', () => ({ authenticateWebHost: async () => 'test-cookie', serveWebDocument: vi.fn(), forwardWebRequest: vi.fn() }))
++vi.mock('../src/web-document.ts', () => ({ authenticateWebHost: async () => 'test-cookie', authenticatedHostTransport: () => vi.fn(), serveWebDocument: vi.fn(), forwardWebRequest: vi.fn() }))
+ // Report persistence has its own unit tests; here it resolves within microtasks so the fatal
+ // dialog never outlives the test that triggered it.
+ vi.mock('../src/crash-report.ts', async importOriginal => ({
+@@ -361,7 +361,7 @@ vi.mock('../src/platform-view.ts', async importOriginal => ({
+   },
+ }))
+ vi.mock('../src/welcome-backend.ts', () => ({
+-  connectDesktopWelcome: async () => ({
++  authenticatedDesktopWelcome: () => ({
+     analyticsEnabled: async () => harness.analyticsEnabled,
+     report: harness.analytics,
+     readLocalePreference: async () => null,
 diff --git a/apps/desktop/tests/source-update-health.spec.ts b/apps/desktop/tests/source-update-health.spec.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..a5a684b78601cc62d0b24a2d976cfac76947b41d
+index 00000000..a5a684b7
 --- /dev/null
 +++ b/apps/desktop/tests/source-update-health.spec.ts
 @@ -0,0 +1,83 @@
@@ -1103,7 +1373,7 @@ index 0000000000000000000000000000000000000000..a5a684b78601cc62d0b24a2d976cfac7
 +})
 diff --git a/apps/desktop/tests/source-updater-paths.spec.ts b/apps/desktop/tests/source-updater-paths.spec.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..eb8aeeab6f12dc71aaf5d3a461fe4f6b7acd3202
+index 00000000..eb8aeeab
 --- /dev/null
 +++ b/apps/desktop/tests/source-updater-paths.spec.ts
 @@ -0,0 +1,60 @@
@@ -1169,12 +1439,12 @@ index 0000000000000000000000000000000000000000..eb8aeeab6f12dc71aaf5d3a461fe4f6b
 +})
 diff --git a/apps/desktop/tests/source-updater.spec.ts b/apps/desktop/tests/source-updater.spec.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..b54b6b7313cd756173146257d467a1aaca237890
+index 00000000..6d347f00
 --- /dev/null
 +++ b/apps/desktop/tests/source-updater.spec.ts
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,289 @@
 +import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-+import { DesktopSourceUpdater, parseDesktopSourceUpdateState, type DesktopSourceUpdateState } from '../src/source-updater.ts'
++import { DesktopSourceHandoffError, DesktopSourceUpdater, parseDesktopSourceUpdateState, type DesktopSourceUpdateState } from '../src/source-updater.ts'
 +
 +const target = { version: '0.2.1-alpha.6', tag: 'dsh-v0.2.1-alpha.6', commit: 'a'.repeat(40) }
 +const owners: DesktopSourceUpdater[] = []
@@ -1185,14 +1455,15 @@ index 0000000000000000000000000000000000000000..b54b6b7313cd756173146257d467a1aa
 +function fixture() {
 +  let idle = 60_000
 +  const states: DesktopSourceUpdateState[] = []
-+  const run = vi.fn(async (action: string): Promise<DesktopSourceUpdateState> => ({ phase: action === 'check' ? 'available' : action === 'prepare' ? 'ready' : 'applying', target }))
++  const run = vi.fn(async (action: string): Promise<DesktopSourceUpdateState> => ({ phase: action === 'check' ? 'available' : action === 'apply' ? 'applying' : 'ready', target }))
++  const inspectInstall = vi.fn(async () => true)
 +  const prepareInstall = vi.fn(async () => true)
 +  const recoverInstall = vi.fn(async () => {})
 +  const quit = vi.fn()
 +  const updater = new DesktopSourceUpdater({ request: { currentVersion: '0.2.1-alpha.5' }, run,
-+    idleMilliseconds: () => idle, prepareInstall, recoverInstall, quit, publish: (state) => { states.push(state) } })
++    idleMilliseconds: () => idle, inspectInstall, prepareInstall, recoverInstall, quit, publish: (state) => { states.push(state) } })
 +  owners.push(updater)
-+  return { updater, run, states, prepareInstall, recoverInstall, quit, input: () => { idle = 0 }, idle: () => { idle = 60_000 } }
++  return { updater, run, states, inspectInstall, prepareInstall, recoverInstall, quit, input: () => { idle = 0 }, idle: () => { idle = 60_000 } }
 +}
 +
 +describe('launch source updates', () => {
@@ -1263,7 +1534,113 @@ index 0000000000000000000000000000000000000000..b54b6b7313cd756173146257d467a1aa
 +    await vi.advanceTimersByTimeAsync(1_000)
 +    expect(f.recoverInstall).toHaveBeenCalledOnce()
 +    expect(f.quit).not.toHaveBeenCalled()
-+    expect(f.updater.state.phase).toBe('deferred')
++    expect(f.updater.state.phase).toBe('failed')
++    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000)
++    await f.updater.launch()
++    expect(f.recoverInstall).toHaveBeenCalledOnce()
++    expect(f.prepareInstall).toHaveBeenCalledOnce()
++    expect(vi.getTimerCount()).toBe(0)
++  })
++
++  it('blocks a missing plugin before stopping the Host and requires explicit retry', async () => {
++    const f = fixture()
++    f.run.mockImplementation(async action => action === 'preflight'
++      ? { phase: 'blocked', target, detail: 'Plugin removed: adaptive' }
++      : { phase: action === 'check' ? 'available' : 'ready', target })
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(120_000)
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++    expect(f.recoverInstall).not.toHaveBeenCalled()
++    expect(f.updater.state).toMatchObject({ phase: 'blocked', detail: 'Plugin removed: adaptive' })
++    await f.updater.launch()
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'prepare', 'preflight'])
++    expect(vi.getTimerCount()).toBe(0)
++    f.run.mockImplementation(async action => ({ phase: action === 'check' ? 'available' : action === 'apply' ? 'applying' : 'ready', target }))
++    await f.updater.launch(true)
++    expect(f.run).toHaveBeenLastCalledWith('prepare', expect.objectContaining({ target }))
++    await vi.advanceTimersByTimeAsync(1_000)
++    expect(f.prepareInstall).toHaveBeenCalledOnce()
++    expect(f.quit).toHaveBeenCalledOnce()
++  })
++
++  it('does not run expensive preflight or stop the Host while tasks are active', async () => {
++    const f = fixture()
++    f.inspectInstall.mockResolvedValue(false)
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(60_000)
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'prepare'])
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++    f.inspectInstall.mockResolvedValue(true)
++    await vi.advanceTimersByTimeAsync(11_000)
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'prepare', 'preflight', 'apply'])
++    expect(f.quit).toHaveBeenCalledOnce()
++  })
++
++  it('rechecks user activity after asynchronous preflight', async () => {
++    const f = fixture()
++    const preflight = Promise.withResolvers<DesktopSourceUpdateState>()
++    f.run.mockImplementation(async action => action === 'preflight' ? preflight.promise
++      : { phase: action === 'check' ? 'available' : 'ready', target })
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(1_000)
++    f.input()
++    preflight.resolve({ phase: 'ready', target })
++    await vi.advanceTimersByTimeAsync(1)
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++    expect(f.quit).not.toHaveBeenCalled()
++  })
++
++  it('refuses a preflight for another release without stopping the Host', async () => {
++    const f = fixture()
++    f.run.mockImplementation(async action => action === 'preflight' ? { phase: 'ready', target: { ...target, commit: 'b'.repeat(40) } }
++      : { phase: action === 'check' ? 'available' : 'ready', target })
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(120_000)
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++    expect(f.updater.state.phase).toBe('failed')
++    expect(vi.getTimerCount()).toBe(0)
++  })
++
++  it('does not quit when apply returns a rejected state', async () => {
++    const f = fixture()
++    f.run.mockImplementation(async action => ({ phase: action === 'check' ? 'available' : action === 'apply' ? 'blocked' : 'ready', target, detail: 'Plugin changed' }))
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(120_000)
++    expect(f.quit).not.toHaveBeenCalled()
++    expect(f.recoverInstall).toHaveBeenCalledOnce()
++    expect(f.updater.state).toMatchObject({ phase: 'failed', detail: 'Plugin changed' })
++    expect(vi.getTimerCount()).toBe(0)
++  })
++
++  it('does not race a live or unverified helper by recovering the Host or retrying', async () => {
++    const f = fixture()
++    f.run.mockImplementation(async action => {
++      if (action === 'apply') throw new DesktopSourceHandoffError('unknown', 'handoff outcome uncertain')
++      return { phase: action === 'check' ? 'available' : 'ready', target }
++    })
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(120_000)
++    await f.updater.launch(true)
++    expect(f.recoverInstall).not.toHaveBeenCalled()
++    expect(f.quit).not.toHaveBeenCalled()
++    expect(f.prepareInstall).toHaveBeenCalledOnce()
++    expect(f.updater.state.phase).toBe('recovery-required')
++    expect(vi.getTimerCount()).toBe(0)
++  })
++
++  it('stops manual and automatic retries if Host recovery fails', async () => {
++    const f = fixture()
++    f.run.mockImplementation(async action => {
++      if (action === 'apply') throw new DesktopSourceHandoffError('rejected', 'helper exited')
++      return { phase: action === 'check' ? 'available' : 'ready', target }
++    })
++    f.recoverInstall.mockRejectedValue(new Error('Host start failed'))
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(120_000)
++    await f.updater.launch(true)
++    expect(f.prepareInstall).toHaveBeenCalledOnce()
++    expect(f.recoverInstall).toHaveBeenCalledOnce()
++    expect(f.updater.state).toMatchObject({ phase: 'recovery-required', detail: expect.stringContaining('Host start failed') })
 +  })
 +
 +  it('cancels idle admission on shutdown without cancelling an independently owned build', async () => {
@@ -1357,7 +1734,7 @@ index 0000000000000000000000000000000000000000..b54b6b7313cd756173146257d467a1aa
 +})
 diff --git a/apps/desktop/tests/source-worker-background.spec.ts b/apps/desktop/tests/source-worker-background.spec.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..f699b3215e06ec3ded6c8b2b818e1d8d40e65c7e
+index 00000000..a8ea776f
 --- /dev/null
 +++ b/apps/desktop/tests/source-worker-background.spec.ts
 @@ -0,0 +1,160 @@
@@ -1492,7 +1869,7 @@ index 0000000000000000000000000000000000000000..f699b3215e06ec3ded6c8b2b818e1d8d
 +    const phases: string[] = []
 +    const updater = new DesktopSourceUpdater({ request: { schemaVersion: 1 },
 +      run: (action, request, detached) => runDesktopSourceWorker(f.executable, f.paths, action, request, detached),
-+      idleMilliseconds: () => 0, prepareInstall: async () => false, recoverInstall: async () => {}, quit: () => {},
++      idleMilliseconds: () => 0, inspectInstall: async () => false, prepareInstall: async () => false, recoverInstall: async () => {}, quit: () => {},
 +      publish: state => { phases.push(state.phase) },
 +    })
 +    try {
@@ -1523,14 +1900,14 @@ index 0000000000000000000000000000000000000000..f699b3215e06ec3ded6c8b2b818e1d8d
 +})
 diff --git a/apps/desktop/tests/source-worker-handoff.spec.ts b/apps/desktop/tests/source-worker-handoff.spec.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..94b147280111d486123816ecd65a602bd20615b3
+index 00000000..cc41fe1a
 --- /dev/null
 +++ b/apps/desktop/tests/source-worker-handoff.spec.ts
-@@ -0,0 +1,45 @@
-+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+@@ -0,0 +1,95 @@
++import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 +import { tmpdir } from 'node:os'
 +import { join } from 'node:path'
-+import { afterEach, expect, it } from 'vitest'
++import { afterEach, expect, it, vi } from 'vitest'
 +import { runDesktopSourceWorker } from '../src/source-updater.ts'
 +
 +const directories: string[] = []
@@ -1556,7 +1933,7 @@ index 0000000000000000000000000000000000000000..94b147280111d486123816ecd65a602b
 +    import { readFile, writeFile } from 'node:fs/promises';
 +    const filename = process.argv[process.argv.indexOf('--request-path') + 1];
 +    const request = JSON.parse(await readFile(filename, 'utf8'));
-+    await writeFile(request.handoffReceipt, JSON.stringify({ token: request.handoffToken, accepted: true }));
++    await writeFile(request.handoffReceipt, JSON.stringify({ schemaVersion: 1, workerPid: process.pid, token: request.handoffToken, accepted: true }));
 +    setTimeout(() => {}, 250);
 +  `)
 +  await expect(runDesktopSourceWorker(fixture.executable, fixture.paths, 'apply', { schemaVersion: 1 }, true)).resolves.toEqual({ phase: 'applying' })
@@ -1567,8 +1944,141 @@ index 0000000000000000000000000000000000000000..94b147280111d486123816ecd65a602b
 +    import { readFile, writeFile } from 'node:fs/promises';
 +    const filename = process.argv[process.argv.indexOf('--request-path') + 1];
 +    const request = JSON.parse(await readFile(filename, 'utf8'));
-+    await writeFile(request.handoffReceipt, JSON.stringify({ token: 'another-attempt', accepted: true }));
++    await writeFile(request.handoffReceipt, JSON.stringify({ schemaVersion: 1, workerPid: process.pid, token: 'another-attempt', accepted: true }));
 +    setTimeout(() => {}, 250);
 +  `)
 +  await expect(runDesktopSourceWorker(fixture.executable, fixture.paths, 'apply', { schemaVersion: 1 }, true)).rejects.toThrow('invalid install helper acceptance')
 +})
++
++it('preserves the specific plugin rejection and private worker logs', async () => {
++  const fixture = await helper(`
++    process.stdout.write(JSON.stringify({ phase: 'blocked', detail: 'Plugin removed: adaptive; current installation retained' }) + '\\n');
++    process.stderr.write('private worker rejection\\n');
++    process.exitCode = 3;
++  `)
++  await expect(runDesktopSourceWorker(fixture.executable, fixture.paths, 'apply', { schemaVersion: 1 }, true))
++    .rejects.toMatchObject({ outcome: 'rejected', message: expect.stringContaining('Plugin removed: adaptive') })
++  const logs = (await readdir(directories.at(-1)!)).filter(name => name.endsWith('.log'))
++  expect(logs).toHaveLength(2)
++  expect(await readFile(join(directories.at(-1)!, logs.find(name => name.endsWith('.stderr.log'))!), 'utf8')).toContain('private worker rejection')
++})
++
++it('treats a receipt from a different worker PID as uncertain', async () => {
++  const fixture = await helper(`
++    import { readFile, writeFile } from 'node:fs/promises';
++    const request = JSON.parse(await readFile(process.argv[process.argv.indexOf('--request-path') + 1], 'utf8'));
++    await writeFile(request.handoffReceipt, JSON.stringify({ schemaVersion: 1, workerPid: process.pid + 1, token: request.handoffToken, accepted: true }));
++    setTimeout(() => {}, 250);
++  `)
++  await expect(runDesktopSourceWorker(fixture.executable, fixture.paths, 'apply', { schemaVersion: 1 }, true))
++    .rejects.toMatchObject({ outcome: 'unknown' })
++})
++
++it('does not call a still-running unacknowledged helper a safe rejection on timeout', async () => {
++  const fixture = await helper(`
++    import { readFile, writeFile } from 'node:fs/promises';
++    const filename = process.argv[process.argv.indexOf('--request-path') + 1];
++    await readFile(filename, 'utf8');
++    await writeFile(filename + '.started', 'started');
++    setTimeout(() => {}, 500);
++  `)
++  const operation = runDesktopSourceWorker(fixture.executable, fixture.paths, 'apply', { schemaVersion: 1 }, true)
++  const assertion = expect(operation).rejects.toMatchObject({ outcome: 'unknown', message: expect.stringContaining('still-running helper') })
++  const directory = directories.at(-1)!
++  for (let tries = 0; ; tries++) {
++    if ((await readdir(directory)).some(name => name.endsWith('.started'))) break
++    if (tries > 100) throw new Error('Fixture worker did not start')
++    await new Promise<void>(resolve => { setTimeout(resolve, 10) })
++  }
++  vi.useFakeTimers({ toFake: ['Date'] })
++  try {
++    vi.setSystemTime(Date.now() + 21_000)
++    await assertion
++  } finally {
++    vi.useRealTimers()
++    await new Promise<void>(resolve => { setTimeout(resolve, 550) })
++  }
++})
+diff --git a/apps/desktop/tests/web-document.spec.ts b/apps/desktop/tests/web-document.spec.ts
+index 0fd9b591..bb2f957b 100644
+--- a/apps/desktop/tests/web-document.spec.ts
++++ b/apps/desktop/tests/web-document.spec.ts
+@@ -2,7 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest'
+ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+-import { authenticateWebHost, forwardWebRequest, serveWebDocument } from '../src/web-document.ts'
++import { createServer } from 'node:http'
++import { authenticateWebHost, authenticatedHostTransport, forwardWebRequest, serveWebDocument } from '../src/web-document.ts'
++import { authenticatedDesktopWelcome } from '../src/welcome-backend.ts'
+ 
+ const roots: string[] = []
+ afterEach(async () => {
+@@ -10,6 +12,48 @@ afterEach(async () => {
+   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+ })
+ 
++it('native welcome reuses the verified cookie even when Host serves no HTML index or browser cookie jar', async () => {
++  let indexReads = 0
++  const server = createServer((request, response) => {
++    if (request.url === '/?token=redacted-test-fixture') {
++      response.writeHead(303, { location: './', 'set-cookie': 'session=owned; HttpOnly; SameSite=Strict' }).end()
++    } else if (request.url === '/') {
++      indexReads++; response.writeHead(404).end()
++    } else if (request.url === '/api/settings/describe' && request.headers.cookie === 'session=owned') {
++      let body = ''
++      request.on('data', chunk => { body += chunk })
++      request.on('end', () => {
++        const { rpcId } = JSON.parse(body) as { rpcId: string }
++        response.setHeader('content-type', 'application/json')
++        response.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true, value: { namespaces: [{ ns: 'locale', value: { preference: 'zh' } }] } } }))
++      })
++    } else response.writeHead(401).end()
++  })
++  await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
++  try {
++    const address = server.address()
++    if (address === null || typeof address === 'string') throw new Error('No fixture address')
++    const host = `http://127.0.0.1:${String(address.port)}/?token=redacted-test-fixture`
++    const cookie = await authenticateWebHost(host)
++    const backend = authenticatedDesktopWelcome(host, authenticatedHostTransport(host, cookie), () => Promise.resolve(cookie))
++    expect(await backend.readLocalePreference()).toBe('zh')
++    expect(indexReads).toBe(0)
++  } finally { await new Promise<void>((resolve, reject) => { server.close(error => { if (error) reject(error); else resolve() }) }) }
++})
++
++it('native authenticated HTTP refuses other authorities and redirects before exposing a cookie', async () => {
++  const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response('rpc'))
++  vi.stubGlobal('fetch', fetch)
++  const send = authenticatedHostTransport('http://127.0.0.1:1234/', 'session=owned')
++  await expect(send('https://other.example/api/account')).rejects.toThrow('authority differs')
++  expect(fetch).not.toHaveBeenCalled()
++  await send('http://127.0.0.1:1234/api/read', { headers: { cookie: 'foreign', origin: 'null' }, redirect: 'follow' })
++  expect(fetch).toHaveBeenCalledWith(expect.any(URL), expect.objectContaining({ redirect: 'error' }))
++  const [, init] = fetch.mock.calls[0]!
++  expect(new Headers(init?.headers).get('cookie')).toBe('session=owned')
++  expect(new Headers(init?.headers).get('origin')).toBeNull()
++})
++
+ it('serves the Web entry and assets without starting or contacting a Host', async () => {
+   const root = await mkdtemp(join(tmpdir(), 'desktop-web-'))
+   roots.push(root)
+diff --git a/apps/desktop/tests/welcome-startup.spec.ts b/apps/desktop/tests/welcome-startup.spec.ts
+index 79152482..7aa09dcd 100644
+--- a/apps/desktop/tests/welcome-startup.spec.ts
++++ b/apps/desktop/tests/welcome-startup.spec.ts
+@@ -1,4 +1,4 @@
+-vi.mock('../src/web-document.ts', () => ({ authenticateWebHost: async () => 'test-cookie', serveWebDocument: vi.fn(), forwardWebRequest: vi.fn() }))
++vi.mock('../src/web-document.ts', () => ({ authenticateWebHost: async () => 'test-cookie', authenticatedHostTransport: () => vi.fn(), serveWebDocument: vi.fn(), forwardWebRequest: vi.fn() }))
+ /** Welcome startup uses the Host before transitioning to the workspace. */
+ 
+ import { afterEach, expect, it, vi } from 'vitest'
+@@ -123,7 +123,7 @@ vi.mock('../src/host-process.ts', () => ({
+   },
+ }))
+ vi.mock('../src/welcome-backend.ts', () => ({
+-  connectDesktopWelcome: async () => ({
++  authenticatedDesktopWelcome: () => ({
+     analyticsEnabled: async () => false,
+     readLocalePreference: async () => state.preference,
+     read: async () => {

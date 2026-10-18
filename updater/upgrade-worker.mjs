@@ -172,7 +172,67 @@ export async function snapshotTree(source, destination, options = {}) {
     } else throw new Blocked(`Unsupported snapshot entry: ${input}`);
   }
   await visit(source, destination, '', []);
-  return { schemaVersion: 1, source: path.resolve(source), destination: path.resolve(destination), entries };
+  const manifest = { schemaVersion: 1, source: path.resolve(source), destination: path.resolve(destination), entries };
+  await verifySnapshotSource(manifest);
+  return manifest;
+}
+
+/** Re-read a finished snapshot's source, including child sets and original link topology. No files are written. */
+export async function verifySnapshotSource(manifest) {
+  const groups = new Map();
+  const children = new Map();
+  const keyOf = value => value.replaceAll('\\', '/');
+  for (const entry of manifest.entries) {
+    const key = keyOf(entry.relative);
+    if (key) assertWithin(manifest.source, path.resolve(manifest.source, entry.relative));
+    const group = groups.get(key) ?? []; group.push(entry); groups.set(key, group);
+    if (key) {
+      const slash = key.lastIndexOf('/'); const parent = slash < 0 ? '' : key.slice(0, slash);
+      const names = children.get(parent) ?? new Set(); names.add(key.slice(slash + 1)); children.set(parent, names);
+    }
+  }
+  const visited = new Set();
+  const changed = relative => new Blocked(`Source changed after snapshot copy: ${relative || '<root>'}; installation deferred`);
+  async function visit(filename, relative, throughLink = false, ancestors = []) {
+    const group = groups.get(relative);
+    if (!group) throw changed(relative);
+    const information = throughLink ? await fs.stat(filename) : await fs.lstat(filename);
+    const link = group.find(entry => entry.kind === 'link');
+    if (!throughLink && link) {
+      if (!information.isSymbolicLink() || await fs.readlink(filename) !== link.link) throw changed(relative);
+      visited.add(relative);
+      if (link.preservedDependency) return; // Record the pointer; unrelated retired dependency bytes were never copied.
+      if (link.dangling || link.opaqueAsar) {
+        try { await fs.realpath(filename); }
+        catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return; throw error; }
+        throw changed(relative);
+      }
+      const resolved = await fs.realpath(filename);
+      if (resolved !== link.resolved || ancestors.includes(resolved)) throw changed(relative);
+      return visit(filename, relative, true, ancestors);
+    }
+    if (!throughLink && information.isSymbolicLink()) throw changed(relative);
+    visited.add(relative);
+    if (information.isDirectory()) {
+      if (!group.some(entry => entry.kind === 'directory')) throw changed(relative);
+      const physical = await fs.realpath(filename);
+      if (ancestors.includes(physical)) throw changed(relative);
+      const actual = (await fs.readdir(filename)).sort();
+      const expected = [...(children.get(relative) ?? [])].sort();
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) throw changed(relative);
+      for (const name of actual) await visit(path.join(filename, name), relative ? `${relative}/${name}` : name, false, [...ancestors, physical]);
+    } else if (information.isFile()) {
+      const file = group.find(entry => entry.kind === 'file');
+      if (!file || information.size !== file.bytes || await hashFile(filename) !== file.sha256) throw changed(relative);
+    } else throw changed(relative);
+  }
+  try { await visit(manifest.source, ''); }
+  catch (error) {
+    if (error instanceof Blocked) throw error;
+    throw new Blocked(`Source unavailable during completed snapshot verification: ${error.message}`);
+  }
+  if (visited.size !== groups.size) throw new Blocked('Source directory inventory changed after snapshot copy; installation deferred');
+  return true;
 }
 
 export async function verifySnapshot(manifest) {
@@ -221,6 +281,8 @@ export async function restoreTree(manifest) {
 
 function parseTarget(target) {
   if (!target || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(target.version) || target.tag !== `dsh-v${target.version}` || !/^[a-f0-9]{40}$/.test(target.commit)) throw new Blocked('Target must name a complete official dsh-v version and 40-character commit');
+  try { compareVersions(target.version, target.version); }
+  catch (error) { throw new Blocked(`Invalid target version: ${error.message}`); }
   return target;
 }
 
@@ -338,39 +400,188 @@ export function sourceInstallArguments(platform = process.platform) {
   return ['install', '--frozen-lockfile', ...(platform === 'win32' ? ['--config.virtual-store-dir-max-length=40'] : [])];
 }
 
-async function assertPlugins(config) {
+export async function assertPlugins(config) {
   if (!Array.isArray(config.plugins) || config.plugins.length !== 3) throw new Blocked('Three pinned local plugin manifests are required');
+  const names = new Set();
   for (const plugin of config.plugins) {
-    const manifest = await json(path.join(plugin.path, 'package.json'));
+    if (!/^@local\/[a-z0-9-]+$/.test(plugin.name) || names.has(plugin.name)) throw new Blocked(`Invalid or duplicate baseline plugin: ${plugin.name}`);
+    names.add(plugin.name);
+    let manifest;
+    try { manifest = await json(path.join(plugin.path, 'package.json')); }
+    catch (error) { throw new Blocked(`Plugin compatibility baseline unavailable: ${plugin.name}; ${error.message}`); }
     if (manifest.name !== plugin.name || manifest.version !== plugin.version) throw new Blocked(`Plugin changed: ${plugin.name}; expected ${plugin.version}, found ${manifest.version}`);
     if (!plugin.files || Object.keys(plugin.files).length === 0) throw new Blocked(`Plugin file hashes missing: ${plugin.name}`);
     for (const [relative, sha256] of Object.entries(plugin.files)) {
-      if (await hashFile(assertWithin(plugin.path, path.join(plugin.path, relative))) !== sha256) throw new Blocked(`Plugin compatibility baseline changed: ${plugin.name}/${relative}`);
+      let actual;
+      try { actual = await hashFile(assertWithin(plugin.path, path.join(plugin.path, relative))); }
+      catch (error) { throw new Blocked(`Plugin compatibility baseline file unavailable: ${plugin.name}/${relative}; ${error.message}`); }
+      if (actual !== sha256) throw new Blocked(`Plugin compatibility baseline changed: ${plugin.name}/${relative}`);
     }
   }
 }
 
-/** Refuse to overwrite a manually updated or edited active plugin with the frozen baseline. */
-export async function assertActivePlugins(config, home) {
-  for (const plugin of config.plugins) {
-    const directory = path.join(home, 'profiles', 'desktop', 'node_modules', plugin.name);
-    const active = await json(path.join(directory, 'package.json'));
-    const original = await json(path.join(plugin.path, 'package.json'));
-    if (active.name !== plugin.name || active.version.split('+')[0] !== plugin.version) throw new Blocked(`Active plugin changed: ${plugin.name}; expected baseline ${plugin.version}, found ${active.version}`);
-    for (const field of ['main', 'exports', 'type', 'dependencies']) {
-      if (JSON.stringify(active[field]) !== JSON.stringify(original[field])) throw new Blocked(`Active plugin configuration changed: ${plugin.name}/${field}; current installation retained`);
-    }
-    for (const [relative, sha256] of Object.entries(plugin.files)) {
-      if (relative === 'package.json' || (relative === 'cordis.patch.yml' && ['@local/dsh-adaptive-mode', '@local/dsh-code-video-mode'].includes(plugin.name))) continue;
-      if (await hashFile(assertWithin(directory, path.join(directory, relative))) !== sha256) throw new Blocked(`Active plugin file changed: ${plugin.name}/${relative}; current installation retained`);
+/** The reserved Desktop plugin project contains external packages, not the built-in runtime graph. */
+export async function assertPluginSelection(plugins, home) {
+  const profile = path.join(home, 'profiles', 'desktop');
+  let manifest;
+  try { manifest = await json(path.join(profile, 'package.json')); }
+  catch (error) { throw new Blocked(`Active Desktop plugin manifest unavailable; current installation retained: ${error.message}`); }
+  const expected = new Set(plugins.map(plugin => plugin.name));
+  const declared = new Set();
+  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+    const entries = manifest[field];
+    if (entries !== undefined && (!entries || typeof entries !== 'object' || Array.isArray(entries))) throw new Blocked(`Invalid Desktop plugin ${field}`);
+    for (const name of Object.keys(entries ?? {})) {
+      if (!expected.has(name)) throw new Blocked(`Plugin compatibility not established: ${name} is newly declared in ${field}; current installation retained`);
+      declared.add(name);
     }
   }
+  for (const name of expected) if (!declared.has(name)) throw new Blocked(`Active plugin not installed or removed from Desktop dependencies: ${name}; current installation retained`);
+  const localDirectory = path.join(profile, 'node_modules', '@local');
+  for (const entry of await fs.readdir(localDirectory).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error))) {
+    const name = `@local/${entry}`;
+    if (!expected.has(name)) throw new Blocked(`Plugin compatibility not established: ${name} is newly installed; current installation retained`);
+  }
+  return manifest;
+}
+
+/** Refuse to overwrite a manually updated or edited active plugin with the frozen baseline. */
+export async function assertActivePlugins(config, home, options = {}) {
+  const profile = await assertPluginSelection(config.plugins, home);
+  let approved;
+  if (config.activePluginPins !== undefined) {
+    if (typeof config.activePluginPins !== 'string' || !path.isAbsolute(config.activePluginPins)) throw new Blocked('activePluginPins must name an explicit absolute trusted manifest');
+    try { approved = await json(config.activePluginPins); }
+    catch (error) { throw new Blocked(`Trusted active plugin qualification is unavailable: ${error.message}`); }
+    if (!Array.isArray(approved.plugins) || approved.plugins.length !== config.plugins.length || new Set(approved.plugins.map(plugin => plugin.name)).size !== config.plugins.length) throw new Blocked('Trusted active plugin qualification inventory differs from the baseline');
+  }
+  const fingerprints = [];
+  for (const plugin of config.plugins) {
+    const directory = path.join(home, 'profiles', 'desktop', 'node_modules', plugin.name);
+    let active;
+    try { active = await json(path.join(directory, 'package.json')); }
+    catch (error) { throw new Blocked(`Active plugin not installed, removed or unreadable: ${plugin.name}; current installation retained. ${error.message}`); }
+    const original = await json(path.join(plugin.path, 'package.json'));
+    if (active.name !== plugin.name || typeof active.version !== 'string' || active.version.split('+')[0] !== plugin.version) throw new Blocked(`Active plugin changed: ${plugin.name}; expected baseline ${plugin.version}, found ${active.version}`);
+    for (const field of ['main', 'exports', 'type', 'dependencies', 'optionalDependencies', 'dsh']) {
+      if (JSON.stringify(active[field]) !== JSON.stringify(original[field])) throw new Blocked(`Active plugin configuration changed: ${plugin.name}/${field}; current installation retained`);
+    }
+    const files = {};
+    let requiresTrustedQualification = JSON.stringify(active) !== JSON.stringify(original);
+    for (const [relative, sha256] of Object.entries(plugin.files)) {
+      let actual;
+      try { actual = await hashFile(assertWithin(directory, path.join(directory, relative))); }
+      catch (error) { throw new Blocked(`Active plugin file missing or unreadable: ${plugin.name}/${relative}; ${error.message}`); }
+      files[relative] = actual;
+      if (relative === 'package.json') continue;
+      if (relative === 'cordis.patch.yml' && ['@local/dsh-adaptive-mode', '@local/dsh-code-video-mode'].includes(plugin.name)) {
+        if (actual !== sha256) requiresTrustedQualification = true;
+        continue;
+      }
+      if (actual !== sha256) throw new Blocked(`Active plugin file changed: ${plugin.name}/${relative}; current installation retained`);
+    }
+    if (requiresTrustedQualification) {
+      const trusted = approved?.plugins.find(item => item.name === plugin.name);
+      if (!trusted || trusted.version !== active.version || !trusted.files?.['package.json'] || (files['cordis.patch.yml'] && !trusted.files['cordis.patch.yml'])) throw new Blocked(`Active plugin manifest or preset differs from baseline: ${plugin.name}; explicit trusted activePluginPins qualification is required before it can be replaced`);
+      for (const [relative, sha256] of Object.entries(trusted.files)) {
+        if (await hashFile(assertWithin(directory, path.join(directory, relative))) !== sha256) throw new Blocked(`Trusted active plugin bytes changed: ${plugin.name}/${relative}; current installation retained`);
+      }
+    }
+    const item = { name: plugin.name, manifest: active, files };
+    const fingerprint = digest(JSON.stringify(item));
+    if (options.capture) options.capture[plugin.name] = fingerprint;
+    if (options.expected && options.expected[plugin.name] !== fingerprint) throw new Blocked(`Active plugin configuration or bytes changed since source preparation: ${plugin.name}; current installation retained`);
+    fingerprints.push(item);
+  }
+  return digest(JSON.stringify({ profile, plugins: fingerprints }));
+}
+
+export async function validateInstallationRoots(config, request = {}) {
+  const roots = [];
+  for (const key of ['root', 'installDir', 'userDataDir', 'sharedDataDir']) {
+    const value = request[key] ?? config[key];
+    if (!value || !path.isAbsolute(value) || path.dirname(value) === value) throw new Blocked(`Invalid ${key}`);
+    if (!config[key] || path.resolve(config[key]).toLowerCase() !== path.resolve(value).toLowerCase()) throw new Blocked(`${key} does not match the configured installation`);
+    await assertUnlinkedAncestors(value);
+    if (!(await fs.stat(value)).isDirectory()) throw new Blocked(`${key} must be an existing directory`);
+    roots.push([key, path.resolve(value)]);
+  }
+  const contains = (parent, child) => { const relative = path.relative(parent, child); return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)); };
+  for (const [name, filename] of roots) for (const [otherName, other] of roots) if (otherName !== name && contains(filename, other)) throw new Blocked('Helper, install and state snapshot roots must be disjoint');
+  return roots.filter(([key]) => key !== 'root');
+}
+
+async function assertCompatiblePlugins(config, plugins, target) {
+  if (!Array.isArray(plugins) || plugins.length !== config.plugins.length || new Set(plugins.map(plugin => plugin.name)).size !== config.plugins.length) throw new Blocked('Compatible plugin inventory differs from the frozen baseline');
+  for (const baseline of config.plugins) {
+    const plugin = plugins.find(item => item.name === baseline.name);
+    if (!plugin || plugin.version !== `${baseline.version}+dsh.${target.version}` || !plugin.files || !Object.keys(plugin.files).length) throw new Blocked(`Compatible plugin target or inventory mismatch: ${baseline.name}`);
+    try {
+      if (!plugin.archive || await hashFile(plugin.archive) !== plugin.archiveSha256) throw new Blocked(`Compatible plugin archive missing or changed: ${baseline.name}`);
+      for (const [relative, sha256] of Object.entries(plugin.files)) if (await hashFile(assertWithin(plugin.path, path.join(plugin.path, relative))) !== sha256) throw new Blocked(`Compatible plugin bytes changed: ${baseline.name}/${relative}`);
+    } catch (error) {
+      if (error instanceof Blocked) throw error;
+      throw new Blocked(`Compatible plugin unavailable: ${baseline.name}; ${error.message}`);
+    }
+  }
+}
+
+/** Read-only qualification while Host is still running; only its caller writes helper status. */
+export async function validateReadyState(config, request, state) {
+  const target = parseTarget(request.target ?? state.target);
+  if (state.schemaVersion !== 1 || !state.target || state.target.commit !== target.commit || state.target.version !== target.version || state.target.tag !== target.tag || state.sourceBuild !== true || state.unsigned !== true || state.appId !== 'com.deepseek.dsh') throw new Blocked('No matching verified source build is ready');
+  const currentVersion = request.currentVersion ?? config.currentVersion;
+  if (typeof currentVersion !== 'string' || compareVersions(target.version, currentVersion) <= 0) throw new Blocked(`Target ${target.version} is not newer than current version ${currentVersion}`);
+  await validateInstallationRoots(config, request);
+  await assertPlugins(config);
+  const fingerprint = await assertActivePlugins(config, config.sharedDataDir, { expected: state.activePluginInventory });
+  if (!config.compatibilityPatch || await hashFile(config.compatibilityPatch) !== state.patchSha256) throw new Blocked('Ready source compatibility patch digest changed or is missing');
+  if (!state.artifactPath || await hashFile(state.artifactPath) !== state.artifactSha256) throw new Blocked('Installer digest changed');
+  if (!state.unpackedApp || !(await fs.stat(state.unpackedApp)).isFile()) throw new Blocked('Verified unpacked application is unavailable');
+  if (typeof state.activePluginFingerprint !== 'string') throw new Blocked('Cached source build lacks a current plugin fingerprint; fresh compatibility qualification is required');
+  if (fingerprint !== state.activePluginFingerprint) throw new Blocked('Active plugin selection, configuration or bytes changed since source preparation; current installation retained');
+  await assertCompatiblePlugins(config, state.targetPlugins, target);
+  return state;
+}
+
+function candidateKey(state) { return digest(JSON.stringify({ target: state.target, patchSha256: state.patchSha256, activePluginFingerprint: state.activePluginFingerprint })); }
+
+async function assertCandidateAllowed(config, state, request, manualRetryAllowed = false) {
+  const filename = path.join(config.root, 'rejected-candidates', `${candidateKey(state)}.json`);
+  if (!await exists(filename)) return;
+  const rejection = await json(filename);
+  if (rejection.active !== true) return;
+  if (manualRetryAllowed && request.manualRetry === true) {
+    await atomicJson(filename, { ...rejection, active: false, manualRetryAt: new Date().toISOString() });
+    return;
+  }
+  throw new Blocked(`Candidate ${state.target.version} is quarantined after ${rejection.phase}: ${rejection.reason}; use an explicit manual retry after inspection`);
+}
+
+export async function quarantineCandidate(config, state, phase, reason) {
+  const filename = path.join(config.root, 'rejected-candidates', `${candidateKey(state)}.json`);
+  await atomicJson(filename, { schemaVersion: 1, active: true, target: state.target, patchSha256: state.patchSha256, activePluginFingerprint: state.activePluginFingerprint, phase, reason, rejectedAt: new Date().toISOString() });
+}
+
+export async function preflight(config, request, state) {
+  if (state.phase !== 'ready') throw new Blocked('No matching verified source build is ready');
+  if (!Number.isSafeInteger(request.appPid) || request.appPid < 1) throw new Blocked('Original application PID is required');
+  if (typeof request.currentVersion !== 'string') throw new Blocked('Current application version is required for preflight');
+  for (const key of ['installDir', 'userDataDir', 'sharedDataDir']) if (!request[key]) throw new Blocked(`Preflight requires ${key}`);
+  await validateReadyState(config, request, state);
+  await assertCandidateAllowed(config, state, request);
+  return state;
 }
 
 async function prepare(config, request, update) {
   const target = parseTarget(request.target);
+  const currentVersion = request.currentVersion ?? config.currentVersion;
+  if (compareVersions(target.version, currentVersion) <= 0) throw new Blocked(`Target ${target.version} is not newer than current version ${currentVersion}`);
   await verifyPublishedTarget(target);
   await assertPlugins(config);
+  await validateInstallationRoots(config, request);
+  const activePluginInventory = {};
+  const activePluginFingerprint = await assertActivePlugins(config, config.sharedDataDir, { capture: activePluginInventory });
   if (!config.compatibilityPatch || !config.compatibilityProbe) throw new Blocked('A fixed source compatibility patch and plugin compatibility probe are required');
   const patchHash = await hashFile(config.compatibilityPatch);
   const layout = sourceBuildLayout(config, target, patchHash);
@@ -379,7 +590,8 @@ async function prepare(config, request, update) {
   const completion = path.join(buildRoot, 'ready.json');
   if (await exists(completion)) {
     const ready = await json(completion);
-    if (ready.target.commit !== target.commit || ready.patchSha256 !== patchHash || await hashFile(ready.artifactPath) !== ready.artifactSha256) throw new Blocked('Cached installer integrity mismatch');
+    await validateReadyState(config, request, ready);
+    await assertCandidateAllowed(config, ready, request, true);
     return update('ready', { ...ready, detail: 'Previously verified source build is ready' });
   }
   if (await exists(buildRoot)) await fs.rename(buildRoot, assertWithin(layout.cache, `${buildRoot}.failed-${randomUUID()}`));
@@ -425,7 +637,10 @@ async function prepare(config, request, update) {
     const artifactPath = path.join(outputRoot, installerName);
     const unpackedApp = path.join(outputRoot, 'win-unpacked', 'DeepSeek Harness.exe');
     if (!await exists(artifactPath) || !await exists(unpackedApp)) throw new Blocked('Verified installer and unpacked application must both exist');
-    const ready = { schemaVersion: 1, target, targetPlugins: compatible.plugins, artifactPath, artifactSha256: await hashFile(artifactPath), unpackedApp, patchSha256: patchHash, builtAt: new Date().toISOString(), buildRoot, sourcePath: source, buildCacheDir: layout.cache, sourceBuild: true, unsigned: true, appId: 'com.deepseek.dsh' };
+    if (await assertActivePlugins(config, config.sharedDataDir) !== activePluginFingerprint) throw new Blocked('Active plugins changed while the source was building; current installation retained');
+    const ready = { schemaVersion: 1, target, targetPlugins: compatible.plugins, artifactPath, artifactSha256: await hashFile(artifactPath), unpackedApp, patchSha256: patchHash, activePluginFingerprint, activePluginInventory, builtAt: new Date().toISOString(), buildRoot, sourcePath: source, buildCacheDir: layout.cache, sourceBuild: true, unsigned: true, appId: 'com.deepseek.dsh' };
+    await validateReadyState(config, request, ready);
+    await assertCandidateAllowed(config, ready, request, true);
     await atomicJson(completion, ready);
     return update('ready', { ...ready, detail: 'Unsigned local source build and plugin checks passed' });
   } finally { log.end(); }
@@ -505,6 +720,7 @@ async function health(config, executable, request, state, phase) {
   } finally { await diagnostic.close(); }
   let launchError;
   child.once('error', error => { launchError = error; });
+  const childOutcome = observeChildExit(child);
   child.unref();
   const deadline = Date.now() + (config.healthTimeoutMs ?? 120_000);
   while (!await exists(receiptPath)) {
@@ -522,8 +738,30 @@ async function health(config, executable, request, state, phase) {
     return receipt;
   } finally {
     await atomicJson(releasePath, { schemaVersion: 1, token, action: 'exit' });
-    await waitForExit(child.pid, 30_000);
+    await requireSuccessfulChildExit(child, childOutcome, phase);
   }
+}
+
+export function observeChildExit(child) {
+  return new Promise(resolve => {
+    child.once('close', (code, signal) => resolve({ code, signal }));
+    child.once('error', error => resolve({ error }));
+  });
+}
+
+export async function requireSuccessfulChildExit(child, childOutcome, phase) {
+  await waitForExit(child.pid, 30_000);
+  const outcome = await Promise.race([childOutcome, sleep(1000).then(() => null)]);
+  if (!outcome) { const error = new Blocked(`${phase} health child exit status is unknown; automatic restoration deferred`); error.retainLock = true; throw error; }
+  if (outcome.error || outcome.code !== 0 || outcome.signal) throw new Error(`${phase} health child did not exit successfully: ${outcome.error?.message ?? outcome.signal ?? outcome.code}`);
+}
+
+export function parseDataProbe(output) {
+  let result;
+  try { result = JSON.parse(output); }
+  catch { throw new Blocked('History and attachment probe did not return valid JSON; installation deferred'); }
+  if (!result || result.schemaVersion !== 1 || result.baselineReadabilityPreserved !== true || result.attachmentsReadable !== true || !Number.isSafeInteger(result.sessionsRead) || result.sessionsRead < 0 || !Number.isSafeInteger(result.preexistingUnreadable) || result.preexistingUnreadable < 0 || result.historyReadable !== (result.preexistingUnreadable === 0) || !Array.isArray(result.preservedFailures) || result.preservedFailures.length !== result.preexistingUnreadable) throw new Blocked('History and attachment probe did not return complete successful readability evidence; installation deferred');
+  return result;
 }
 
 export function validateAdmission(admission) {
@@ -551,6 +789,7 @@ export async function stageCompatiblePlugins(plugins, home) {
   const manifestPath = path.join(profile, 'package.json');
   const manifest = await json(manifestPath);
   if (!manifest.dependencies || !plugins || plugins.length !== 3) throw new Blocked('Isolated plugin profile or target compatibility manifest missing');
+  await assertPluginSelection(plugins, home);
   for (const plugin of plugins) {
     if (!/^@local\/[a-z0-9-]+$/.test(plugin.name) || await hashFile(plugin.archive) !== plugin.archiveSha256) throw new Blocked(`Compatible plugin archive changed: ${plugin.name}`);
     for (const [relative, sha256] of Object.entries(plugin.files)) if (await hashFile(assertWithin(plugin.path, path.join(plugin.path, relative))) !== sha256) throw new Blocked(`Compatible plugin bytes changed: ${plugin.name}/${relative}`);
@@ -593,22 +832,13 @@ export async function restorePreservedDependencyLinks(manifest, destination) {
 
 async function apply(config, request, update) {
   const state = await json(path.join(config.root, 'status.json'));
-  if (state.phase !== 'ready' || state.target.commit !== request.target.commit || state.target.version !== request.target.version) throw new Blocked('No matching verified source build is ready');
-  if (await hashFile(state.artifactPath) !== state.artifactSha256) throw new Blocked('Installer digest changed');
-  await assertPlugins(config);
+  if (state.phase !== 'ready') throw new Blocked('No matching verified source build is ready');
+  await validateReadyState(config, request, state);
+  await assertCandidateAllowed(config, state, request);
   validateAdmission(request.admission);
-  await assertActivePlugins(config, request.sharedDataDir);
   if (!Number.isSafeInteger(request.appPid) || request.appPid < 1) throw new Blocked('Original application PID is required');
-  const roots = ['installDir', 'userDataDir', 'sharedDataDir'].map(key => {
-    const value = request[key];
-    if (!value || !path.isAbsolute(value) || path.dirname(value) === value) throw new Blocked(`Invalid ${key}`);
-    if (!config[key] || path.resolve(config[key]).toLowerCase() !== path.resolve(value).toLowerCase()) throw new Blocked(`${key} does not match the configured installation`);
-    return [key, path.resolve(value)];
-  });
-  for (const [name, filename] of roots) {
-    await assertUnlinkedAncestors(filename);
-    for (const [otherName, other] of roots) if (otherName !== name && (filename === other || !path.relative(filename, other).startsWith('..'))) throw new Blocked('Install and state snapshot roots must be disjoint');
-  }
+  for (const key of ['installDir', 'userDataDir', 'sharedDataDir']) if (!request[key]) throw new Blocked(`Apply requires ${key}`);
+  const roots = await validateInstallationRoots(config, request);
   if (request.handoffReceipt || request.handoffToken) {
     if (typeof request.handoffToken !== 'string' || !/^[a-f0-9-]{36}$/.test(request.handoffToken)
       || typeof request.handoffReceipt !== 'string') throw new Blocked('Invalid native handoff receipt');
@@ -625,6 +855,8 @@ async function apply(config, request, update) {
   let installationStarted = false;
   let installerSettled = false;
   try {
+  // Plugins can change during native shutdown; recheck before copying or staging their profile.
+  await validateReadyState(config, request, state);
   await update('backing-up', { ...state, phase: 'backing-up', transaction, detail: 'All detected application writers stopped; taking consistent full snapshots' });
   tx.installationMetadata = await installationMetadata(config, transaction, 'Snapshot');
   await atomicJson(journalPath, tx);
@@ -637,6 +869,7 @@ async function apply(config, request, update) {
     await atomicJson(journalPath, tx);
   }
   await assertNoWriters(config, request);
+  for (const snapshot of Object.values(tx.snapshots)) await verifySnapshotSource(snapshot);
   tx.historyBaseline = await prepareHistoryBaseline(config, request, tx);
   await atomicJson(journalPath, tx);
   const isolated = path.join(transaction, 'migration');
@@ -652,7 +885,9 @@ async function apply(config, request, update) {
   tx.isolatedHealth = await health(config, state.unpackedApp, request, healthState, 'isolated');
   if (!config.dataProbe) throw new Blocked('A history and attachment parser probe is required before installation');
   tx.dataProbe = await run(config.tools.node.executable, [config.dataProbe, '--source', state.sourcePath ?? path.join(state.buildRoot, 'source'), '--home', isolatedSharedDataDir, '--baseline', tx.historyBaseline.path, '--config', config.configPath], { timeoutMs: 600_000, env: { ...process.env, DSH_HOME: isolatedSharedDataDir } });
+  const dataResult = parseDataProbe(tx.dataProbe);
   await assertNoWriters(config, request);
+  for (const snapshot of Object.values(tx.snapshots)) await verifySnapshotSource(snapshot);
   tx.stage = 'install-started'; await atomicJson(journalPath, tx);
     installationStarted = true;
     await update('installing', { ...state, phase: 'installing', transaction, detail: 'Installing the verified unsigned source build in place' });
@@ -682,12 +917,14 @@ async function apply(config, request, update) {
     tx.stage = 'completed'; tx.completedAt = new Date().toISOString(); await atomicJson(journalPath, tx);
     const normalEnvironment = { ...process.env }; delete normalEnvironment.ELECTRON_RUN_AS_NODE; delete normalEnvironment.DSH_SOURCE_UPDATE_DISABLE_SCHEDULES;
     const child = spawn(installedExecutable, [], { detached: true, windowsHide: false, stdio: 'ignore', env: normalEnvironment }); child.unref();
-    const dataResult = JSON.parse(tx.dataProbe);
     return update('installed', { ...state, phase: 'installed', transaction, installedAt: tx.completedAt, detail: `Installed build and migrated state passed health checks; ${dataResult.sessionsRead} sessions readable, ${dataResult.preexistingUnreadable ?? 0} previously unreadable records retained unchanged` });
   } catch (error) {
     tx.failure = { message: error.message, at: new Date().toISOString() };
     if (!installationStarted && !error.retainLock) {
-      tx.stage = 'deferred-before-install'; await atomicJson(journalPath, tx);
+      try {
+        await quarantineCandidate(config, state, 'deferred-before-install', error.message);
+        tx.stage = 'deferred-before-install'; await atomicJson(journalPath, tx);
+      } catch (diagnosticError) { throw await requireManualRecovery(tx, journalPath, 'Candidate rejection could not be saved; automatic retry deferred', diagnosticError); }
       await assertNoWriters(config, request);
       const oldEnvironment = { ...process.env }; delete oldEnvironment.ELECTRON_RUN_AS_NODE; delete oldEnvironment.DSH_SOURCE_UPDATE_DISABLE_SCHEDULES;
       const child = spawn(path.join(request.installDir, path.basename(state.unpackedApp)), [], { detached: true, windowsHide: false, stdio: 'ignore', env: oldEnvironment }); child.unref();
@@ -705,6 +942,7 @@ async function apply(config, request, update) {
         await atomicJson(journalPath, tx);
       }
       await installationMetadata(config, transaction, 'Restore');
+      await quarantineCandidate(config, state, 'rolled-back', error.message);
       tx.stage = 'rolled-back'; await atomicJson(journalPath, tx);
     } catch (restoreError) {
       throw await requireManualRecovery(tx, journalPath, 'Matched rollback could not finish; retained transaction lock', restoreError);
@@ -732,7 +970,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
     process.stdout.write(`${JSON.stringify(state)}\n`); return state;
   }
-  if (!['check', 'prepare', 'apply'].includes(action)) throw new Error('Expected check, prepare, apply, or status');
+  if (!['check', 'prepare', 'preflight', 'apply'].includes(action)) throw new Error('Expected check, prepare, preflight, apply, or status');
   const requestPath = argument('--request-path');
   const request = requestPath ? { ...await json(requestPath), requestPath } : JSON.parse(argument('--request') ?? '{}');
   if (action !== 'check' && request.schemaVersion !== 1) throw new Error('Unsupported request schema');
@@ -760,14 +998,25 @@ export async function main(argv = process.argv.slice(2)) {
       const previous = await json(statusPath).catch(() => ({}));
       const currentVersion = request.currentVersion ?? (previous.phase === 'installed' ? previous.target.version : config.currentVersion);
       const target = await latestPublished(currentVersion);
-      result = previous.phase === 'ready' && target?.commit === previous.target?.commit ? await update('ready', previous) : await update(target ? 'available' : 'current', { currentVersion, ...(target ? { target } : {}), detail: target ? 'A newer published source version is available' : 'No newer published version' });
+      if (target && previous.target?.commit === target.commit && previous.artifactPath) {
+        await validateReadyState(config, { ...request, currentVersion, target }, previous);
+        await assertCandidateAllowed(config, previous, request, true);
+        result = await update('ready', previous);
+      } else {
+        // Even a new release must not silently reintroduce a removed or unsupported plugin.
+        if (target) { await assertPlugins(config); await assertActivePlugins(config, config.sharedDataDir); }
+        result = await update(target ? 'available' : 'current', { currentVersion, ...(target ? { target } : {}), detail: target ? 'A newer published source version is available' : 'No newer published version' });
+      }
+    } else if (action === 'preflight') {
+      const state = await preflight(config, request, await json(statusPath));
+      result = await update('ready', { ...state, preflightAt: new Date().toISOString(), detail: 'Ready target, installer and current plugins passed read-only preflight' });
     } else result = await (action === 'prepare' ? prepare(config, request, update) : apply(config, request, update));
     process.stdout.write(`${JSON.stringify(result)}\n`); return result;
   } catch (error) {
     retainLock = error.retainLock === true;
     const previous = await json(statusPath).catch(() => ({}));
     const phase = error.recoveryRequired ? 'recovery-required' : error instanceof Blocked ? 'blocked' : 'failed';
-    const failureState = { ...previous, target: request.target, detail: error.message, ...(error.transaction ? { transaction: error.transaction } : {}), ...(error.journalFailure ? { journalFailure: error.journalFailure } : {}) };
+    const failureState = { ...previous, ...(request.target ? { target: request.target } : {}), detail: error.message, ...(error.transaction ? { transaction: error.transaction } : {}), ...(error.journalFailure ? { journalFailure: error.journalFailure } : {}) };
     let state;
     try { state = await update(phase, failureState); }
     catch (statusError) {
