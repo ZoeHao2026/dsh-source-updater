@@ -9,7 +9,7 @@ import { atomicJson, assertActivePlugins, assertWithin, hashFile, snapshotTree, 
 const execute = promisify(execFile);
 const own = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
-const usage = 'Create: node recovery-integration.mjs --create-fixture-inputs ABS_EMPTY_OWNED_SANDBOX. Run: node recovery-integration.mjs --fixture-config ABS_JSON --compatible-manifest ABS_JSON --workspace ABS_OWNED_SANDBOX [--writer-blocks-rollback | --journal-failure | --invalid-data-probe | --health-nonzero]. Never supply production configuration.';
+const usage = 'Create: node recovery-integration.mjs --create-fixture-inputs ABS_EMPTY_OWNED_SANDBOX. Run: node recovery-integration.mjs --fixture-config ABS_JSON --compatible-manifest ABS_JSON --workspace ABS_OWNED_SANDBOX [--writer-blocks-rollback | --journal-failure | --invalid-data-probe | --health-nonzero | --qualification-success | --qualification-partial-failure | --qualification-journal-failure]. Never supply production configuration.';
 const absolute = flag => {
   const index = args.indexOf(flag);
   if (index < 0 || args.lastIndexOf(flag) !== index || !args[index + 1] || !path.isAbsolute(args[index + 1])) throw new Error(usage);
@@ -23,7 +23,11 @@ const writerBlocksRollback = args.includes('--writer-blocks-rollback');
 const journalFailure = args.includes('--journal-failure');
 const invalidDataProbe = args.includes('--invalid-data-probe');
 const healthNonzero = args.includes('--health-nonzero');
-if ([writerBlocksRollback, journalFailure, invalidDataProbe, healthNonzero].filter(Boolean).length > 1 || creating && args.length !== 2) throw new Error(usage);
+const qualificationSuccess = args.includes('--qualification-success');
+const qualificationPartialFailure = args.includes('--qualification-partial-failure');
+const qualificationJournalFailure = args.includes('--qualification-journal-failure');
+const qualificationMode = qualificationSuccess || qualificationPartialFailure || qualificationJournalFailure;
+if ([writerBlocksRollback, journalFailure, invalidDataProbe, healthNonzero, qualificationSuccess, qualificationPartialFailure, qualificationJournalFailure].filter(Boolean).length > 1 || creating && args.length !== 2) throw new Error(usage);
 if (process.platform !== 'win32') throw new Error('This explicit recovery fixture requires Windows.');
 const powershell = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
 const workspaceStat = await fs.lstat(workspace);
@@ -88,6 +92,10 @@ if (healthNonzero) {
   const altered = source.replace(/      return 0;\r?\n    } catch/, '      return 7;\n    } catch');
   assert.notEqual(altered, source, 'Fixture health exit hook must exist.'); source = altered;
 }
+if (qualificationMode) {
+  const altered = source.replace('(string)request["phase"] == "installed-final" ? "injected-failure" : request["version"]', 'request["version"]');
+  assert.notEqual(altered, source, 'Fixture final health success hook must exist.'); source = altered;
+}
 const fixtureSource = path.join(root, 'RecoveryFixture.cs'); await fs.writeFile(fixtureSource, source);
 await execute(powershell, ['-NoProfile', '-NonInteractive', '-File', path.join(own, 'tests/compile-recovery-fixture.ps1'), '-Source', fixtureSource, '-OutputPath', fixture], { windowsHide: true });
 const install = path.join(root, 'install'); const home = path.join(root, 'shared'); const electron = path.join(root, 'electron'); const helper = path.join(root, 'helper');
@@ -99,7 +107,14 @@ await fs.writeFile(path.join(electron, 'settings.json'), '{"schema":1}');
 const profile = path.join(home, 'profiles/desktop'); await fs.mkdir(profile, { recursive: true });
 await atomicJson(path.join(profile, 'package.json'), { dependencies: Object.fromEntries(fixtureConfig.plugins.map(plugin => [plugin.name, plugin.version])) });
 for (const plugin of fixtureConfig.plugins) await fs.cp(plugin.path, path.join(profile, 'node_modules', plugin.name), { recursive: true, dereference: true });
-await fs.copyFile(path.join(own, 'upgrade-worker.mjs'), path.join(helper, 'upgrade-worker.mjs'));
+let fixtureWorker = await fs.readFile(path.join(own, 'upgrade-worker.mjs'), 'utf8');
+if (qualificationPartialFailure || qualificationJournalFailure) {
+  const hook = '    await atomicJson(file.filename, planned[name].value);';
+  assert.equal(fixtureWorker.split(hook).length - 1, 1, 'Fixture qualification commit hook must be unique.');
+  const fault = qualificationPartialFailure ? 'throw new Error("fixture failure after pins rename before config commit");' : 'await fs.rename(journalPath, journalPath + ".before-fixture-fault"); await fs.mkdir(journalPath); throw new Error("fixture journal failure after pins rename");';
+  fixtureWorker = fixtureWorker.replace(hook, `${hook}\n    if (name === 'pins') { ${fault} }`);
+}
+await fs.writeFile(path.join(helper, 'upgrade-worker.mjs'), fixtureWorker);
 await fs.writeFile(path.join(helper, 'inspect-processes.ps1'), "param([string]$RequestPath)\nif ($env:DSH_FIXTURE_RECOVERY_WRITER_MARKER -and (Test-Path -LiteralPath $env:DSH_FIXTURE_RECOVERY_WRITER_MARKER)) { Write-Output '[{\"pid\":99999,\"name\":\"fixture-active-writer\"}]' } else { Write-Output '[]' }\n");
 await fs.writeFile(path.join(helper, 'installation-metadata.ps1'), "param([string]$Action,[string]$ConfigPath,[string]$Destination)\n$ErrorActionPreference='Stop'\n$config=Get-Content -LiteralPath $ConfigPath -Raw|ConvertFrom-Json\nAdd-Content -LiteralPath (Join-Path $config.root 'metadata-actions.txt') -Value $Action\nWrite-Output ('{\"fixture\":true,\"action\":\"'+$Action+'\"}')\n");
 const evidence = { schemaVersion: 1, baselineReadabilityPreserved: true, attachmentsReadable: true, historyReadable: true, sessionsRead: 0, preexistingUnreadable: 0, preservedFailures: [] };
@@ -112,7 +127,10 @@ await atomicJson(path.join(helper, 'history-baselines', `${programDigest}-${inve
 const config = { schemaVersion: 1, currentVersion: fixtureConfig.currentVersion, compatibilityPatch: fixtureConfig.compatibilityPatch, plugins: fixtureConfig.plugins,
   root: helper, installDir: install, sharedDataDir: home, userDataDir: electron, dataProbe: path.join(helper, 'data-probe.mjs'), healthTimeoutMs: 15000,
   tools: { node: { executable: process.execPath }, powershell: { executable: powershell } } };
+config.activePluginPins = path.join(helper, 'trusted-active-plugins.json');
+await atomicJson(config.activePluginPins, { schemaVersion: 1, plugins: fixtureConfig.plugins.map(plugin => ({ name: plugin.name, version: plugin.version, files: plugin.files })) });
 const configPath = path.join(helper, 'updater-config.json'); await atomicJson(configPath, config);
+const oldConfigBytes = await fs.readFile(configPath); const oldPinsBytes = await fs.readFile(config.activePluginPins);
 const target = { version: plugins.targetVersion, tag: `dsh-v${plugins.targetVersion}`, commit: plugins.targetCommit };
 const activePluginInventory = {};
 const activePluginFingerprint = await assertActivePlugins(config, home, { capture: activePluginInventory });
@@ -136,6 +154,48 @@ const invoke = async action => {
 const result = await invoke('apply');
 await fs.writeFile(path.join(root, 'worker-output.log'), result.stdout + result.stderr);
 const status = JSON.parse(await fs.readFile(path.join(helper, 'status.json'), 'utf8'));
+if (qualificationMode) {
+  const expected = qualificationSuccess ? 'installed' : qualificationPartialFailure ? 'rolled-back' : 'recovery-required';
+  assert.equal(status.phase, expected);
+  const journalPath = path.join(status.transaction, 'transaction.json');
+  const tx = JSON.parse(await fs.readFile(qualificationJournalFailure ? `${journalPath}.before-fixture-fault` : journalPath, 'utf8'));
+  assert.equal(tx.finalHealth.version, target.version, 'The final real-path health must succeed before qualification is written.');
+  assert.deepEqual(tx.qualification.planned.pins.value.plugins.map(plugin => plugin.name), names);
+  assert.equal(tx.qualification.planned.config.value.currentVersion, target.version);
+  if (qualificationPartialFailure) {
+    assert.match(status.detail, /failure after pins rename before config commit/);
+    for (const [name, directory, expected] of [['install', install, oldInstall], ['shared', home, oldHome], ['electron', electron, oldElectron]]) {
+      const observed = await snapshotTree(directory, path.join(root, `observed-${name}`));
+      assert.equal(snapshotInventoryDigest(observed), snapshotInventoryDigest(expected), `${name} must match the old generation`);
+    }
+    assert.deepEqual(await fs.readFile(configPath), oldConfigBytes);
+    assert.deepEqual(await fs.readFile(config.activePluginPins), oldPinsBytes);
+    assert.equal(await fs.lstat(path.join(helper, 'worker.lock')).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; }), false);
+  } else {
+    const pins = JSON.parse(await fs.readFile(config.activePluginPins, 'utf8'));
+    assert.deepEqual(pins.plugins.map(plugin => ({ name: plugin.name, version: plugin.version, files: plugin.files })), plugins.plugins.map(plugin => ({ name: plugin.name, version: plugin.version, files: plugin.files })));
+    assert.equal(await fs.readFile(path.join(install, 'version.txt'), 'utf8'), 'new-program');
+    assert.equal(await fs.readFile(path.join(home, 'history-version.txt'), 'utf8'), 'new-history');
+    if (qualificationSuccess) {
+      const advanced = JSON.parse(await fs.readFile(configPath, 'utf8'));
+      assert.equal(advanced.currentVersion, target.version);
+      await assertActivePlugins(advanced, home);
+      assert.equal(await fs.lstat(path.join(helper, 'worker.lock')).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; }), false);
+    } else {
+      assert.deepEqual(await fs.readFile(configPath), oldConfigBytes, 'A partial commit must retain the original config until recovery.');
+      assert.ok((await fs.stat(path.join(helper, 'worker.lock'))).isFile());
+      assert.ok(status.journalFailure);
+      assert.equal(tx.stage, 'committing-updater-qualification');
+    }
+  }
+  const mode = qualificationSuccess ? 'success' : qualificationPartialFailure ? 'partial-failure' : 'journal-failure';
+  const report = { pass: true, fixtureOnly: true, root, mode, finalHealthPassed: true, phase: status.phase, candidatePinsCommitted: !qualificationPartialFailure,
+    ...(qualificationSuccess ? { currentVersionAdvanced: true, nextCheckQualificationPassed: true } : qualificationPartialFailure ? { matchingProgramDataAndHelperRestored: true } : { originalConfigRetained: true, plannedValuesJournaled: true, lockRetained: true }),
+    scope: 'Real apply coordinator and Windows child processes; synthetic fixture installer and plugin packages, with an isolated copied-worker fault injection only for partial commits; no live configuration or user data' };
+  await atomicJson(path.join(workspace, `qualification-${mode}-integration-result.json`), report);
+  console.log(JSON.stringify(report, null, 2));
+  process.exit(0);
+}
 const earlyFailure = invalidDataProbe || healthNonzero;
 assert.equal(status.phase, writerBlocksRollback || journalFailure ? 'recovery-required' : earlyFailure ? 'blocked' : 'rolled-back');
 assert.match(status.detail, writerBlocksRollback ? /Data writers still running: fixture-active-writer:99999/ : journalFailure ? /Matched rollback could not finish/ : invalidDataProbe ? /probe did not return valid JSON/ : healthNonzero ? /isolated health child did not exit successfully: 7/ : /installed-final health receipt failed required checks/);

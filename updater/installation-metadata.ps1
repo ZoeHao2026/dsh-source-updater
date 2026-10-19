@@ -52,6 +52,9 @@ if ($Action -eq 'Snapshot') {
     if ($Action -eq 'Restore') {
         foreach ($taskEntry in $taskManifest.registry) {
             if ($taskEntry.key -notmatch '^HKEY_CURRENT_USER\\Software\\(Microsoft\\Windows\\CurrentVersion\\Uninstall\\)?[a-f0-9-]{36}$') { throw 'Registry key is outside the application installation identity' }
+            # Import merges values; remove only this snapshotted identity so candidate-only values cannot survive rollback.
+            $taskProviderKey = 'Registry::' + $taskEntry.key
+            if (Test-Path -LiteralPath $taskProviderKey) { Remove-Item -LiteralPath $taskProviderKey -Recurse -Force }
             & reg.exe import (Join-Path $taskDestination $taskEntry.file) | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'Installation registry restoration failed' }
         }

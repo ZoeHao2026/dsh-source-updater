@@ -27,6 +27,15 @@ if (config.baselineRoot !== undefined) {
 }
 if (!(await stat(baselineRoot)).isDirectory()) throw new Error('Baseline source root must be a directory')
 const outputRoot = resolve(config.pluginOutputDir ?? config.outputDir ?? join(ownRoot, 'ported'))
+const baseline = JSON.parse(await readFile(join(ownRoot, 'baseline-inventory.json'), 'utf8'))
+const selectedNames = config.selectedPlugins ?? baseline.map(entry => entry.name)
+assert.ok(Array.isArray(selectedNames) && selectedNames.length > 0, 'selectedPlugins must be a nonempty array of qualified plugin names')
+assert.equal(new Set(selectedNames).size, selectedNames.length, 'selectedPlugins contains duplicate names')
+for (const name of selectedNames) assert.ok(typeof name === 'string' && baseline.some(entry => entry.name === name), `Plugin compatibility baseline not established: ${String(name)}`)
+const selected = baseline.filter(entry => selectedNames.includes(entry.name))
+const adaptiveSelected = selectedNames.includes('@local/dsh-adaptive-mode')
+const videoSelected = selectedNames.includes('@local/dsh-code-video-mode')
+const uiSelected = selectedNames.includes('@local/dsh-ui-model-selection-collapsible')
 const sourceVersion = JSON.parse(await readFile(join(sourceRoot, 'package.json'), 'utf8')).version
 const targetVersion = JSON.parse(await readFile(join(sourceRoot, 'apps/desktop/package.json'), 'utf8')).version
 const cordisVersion = JSON.parse(await readFile(join(sourceRoot, 'vendor/cordis/package.json'), 'utf8')).version
@@ -34,8 +43,7 @@ const targetCommit = execFileSync('git', ['-C', sourceRoot, 'rev-parse', 'HEAD']
 if (config.expectedCommit) assert.equal(targetCommit, config.expectedCommit, 'target commit drift')
 const sha256 = value => createHash('sha256').update(value).digest('hex')
 const normalized = value => value.replace(/\r\n?/g, '\n')
-const standard = normalized(await readFile(join(sourceRoot, 'packages/bundle/web-app/presets/standard.patch.yml'), 'utf8'))
-const baseline = JSON.parse(await readFile(join(ownRoot, 'baseline-inventory.json'), 'utf8'))
+const standard = adaptiveSelected || videoSelected ? normalized(await readFile(join(sourceRoot, 'packages/bundle/web-app/presets/standard.patch.yml'), 'utf8')) : ''
 const readTarget = path => readFile(join(sourceRoot, path), 'utf8')
 const checks = []
 async function requireFragments(plugin, path, fragments) {
@@ -46,18 +54,22 @@ async function requireFragments(plugin, path, fragments) {
   checks.push({ plugin, path, fragments })
 }
 // Check the actual official contracts consumed by the unchanged shipped bundles.
-await requireFragments('adaptive', 'packages/client/ui-conversation/src/client/contract/slots.ts', ["'conversation.input.right'", "scope: 'session'"])
-await requireFragments('adaptive', 'packages/interaction/commands/src/index.ts', ['execute('])
-await requireFragments('adaptive', 'packages/plan/plan-mode/src/index.ts', ['get(agent:', 'set(agent:', 'pending?: boolean'])
-await requireFragments('adaptive', 'packages/core/system-prompt/src/index.ts', ['getSectionOrder(', 'section(section:'])
-await requireFragments('adaptive', 'packages/session/session-projection/src/index.ts', ['stateOf<', 'register<'])
-await requireFragments('adaptive', 'packages/goal/goal/src/index.ts', ['current: goalProjectionSchema', "zod.literal('active')"])
-await requireFragments('adaptive, model selector', 'packages/client/web/src/platform.ts', ["'react'", "'react/jsx-runtime'", "'react-dom'", "'@deepseek-ai/dsh-client-ui-primitives'"])
-await requireFragments('model selector', 'packages/client/ui-model-selection/src/client/directory.ts', ['current: ModelSelection | null', 'routable: boolean | null', 'pending: ModelSelection | null', 'async load()', 'async select(selection: ModelSelection)'])
-await requireFragments('model selector', 'packages/client/ui-model-selection/src/client/service.ts', ['directoryFor(sessionId:'])
-await requireFragments('model selector', 'packages/api/session-controller/src/client/sessions/manager.ts', ['subagentAddress(', 'projectionValues('])
-await requireFragments('model selector', 'packages/client/ui-primitives/src/index.ts', ['MenuSurface', 'Toast', 'StateDot', 'rankByName'])
-await requireFragments('code-video, adaptive', 'packages/core/tools/src/index.ts', ['register(definition: ToolDefinition)', 'readonly output: ToolOutputDefinition', 'execute(args: unknown, exec: ToolRunContext)'])
+if (adaptiveSelected) {
+  await requireFragments('adaptive', 'packages/client/ui-conversation/src/client/contract/slots.ts', ["'conversation.input.right'", "scope: 'session'"])
+  await requireFragments('adaptive', 'packages/interaction/commands/src/index.ts', ['execute('])
+  await requireFragments('adaptive', 'packages/plan/plan-mode/src/index.ts', ['get(agent:', 'set(agent:', 'pending?: boolean'])
+  await requireFragments('adaptive', 'packages/core/system-prompt/src/index.ts', ['getSectionOrder(', 'section(section:'])
+  await requireFragments('adaptive', 'packages/session/session-projection/src/index.ts', ['stateOf<', 'register<'])
+  await requireFragments('adaptive', 'packages/goal/goal/src/index.ts', ['current: goalProjectionSchema', "zod.literal('active')"])
+}
+if (adaptiveSelected || uiSelected) await requireFragments([adaptiveSelected && 'adaptive', uiSelected && 'model selector'].filter(Boolean).join(', '), 'packages/client/web/src/platform.ts', ["'react'", "'react/jsx-runtime'", "'react-dom'", "'@deepseek-ai/dsh-client-ui-primitives'"])
+if (uiSelected) {
+  await requireFragments('model selector', 'packages/client/ui-model-selection/src/client/directory.ts', ['current: ModelSelection | null', 'routable: boolean | null', 'pending: ModelSelection | null', 'async load()', 'async select(selection: ModelSelection)'])
+  await requireFragments('model selector', 'packages/client/ui-model-selection/src/client/service.ts', ['directoryFor(sessionId:'])
+  await requireFragments('model selector', 'packages/api/session-controller/src/client/sessions/manager.ts', ['subagentAddress(', 'projectionValues('])
+  await requireFragments('model selector', 'packages/client/ui-primitives/src/index.ts', ['MenuSurface', 'Toast', 'StateDot', 'rankByName'])
+}
+if (adaptiveSelected || videoSelected) await requireFragments([videoSelected && 'code-video', adaptiveSelected && 'adaptive'].filter(Boolean).join(', '), 'packages/core/tools/src/index.ts', ['register(definition: ToolDefinition)', 'readonly output: ToolOutputDefinition', 'execute(args: unknown, exec: ToolRunContext)'])
 
 function replaceOnce(text, needle, replacement, plugin) {
   assert.equal(text.split(needle).length - 1, 1, `${plugin}: expected one ${needle}`)
@@ -88,7 +100,7 @@ function customPreset(name, persona) {
 
 const manifest = { targetVersion, targetCommit, sourceVersion, generatedAt: new Date().toISOString(), plugins: [], contractChecks: checks }
 await mkdir(outputRoot, { recursive: true })
-for (const entry of baseline) {
+for (const entry of selected) {
   const directory = entry.name.slice('@local/'.length)
   const from = join(baselineRoot, directory)
   const to = join(outputRoot, directory)

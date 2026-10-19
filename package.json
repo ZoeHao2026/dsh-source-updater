@@ -1,6 +1,6 @@
 {
   "name": "dsh-source-updater",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Community Windows source updater for DeepSeek Harness",
   "license": "MIT",
@@ -11,7 +11,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test updater/upgrade-worker.test.mjs updater/baseline-compatibility.test.mjs updater/deploy-updater.test.mjs updater/preflight.test.mjs",
+    "test": "node --test updater/upgrade-worker.test.mjs updater/worker-lock-races.test.mjs updater/installation-metadata.test.mjs updater/baseline-compatibility.test.mjs updater/deploy-updater.test.mjs updater/preflight.test.mjs updater/qualification.test.mjs plugins/tests/probe-selection.test.mjs",
     "verify:source": "python scripts/verify-public-source.py"
   }
 }

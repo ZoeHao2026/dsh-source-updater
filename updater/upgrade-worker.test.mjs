@@ -3,15 +3,26 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { acquireLock, assertWithin, atomicJson, Blocked, compareVersions, ensureBuildCache, hashFile, latestPublished, requireManualRecovery, restoreTree, restorePreservedDependencyLinks, snapshotTree, sourceBuildLayout, sourceInstallArguments, validateAdmission, verifyPublishedTarget, verifySnapshot, verifySnapshotSource } from './upgrade-worker.mjs';
+import { acquireLock, assertWithin, atomicJson, Blocked, compareVersions, ensureBuildCache, hashFile, latestPublished, requireManualRecovery, restoreTree, restorePreservedDependencyLinks, run, snapshotTree, sourceBuildEnvironment, sourceBuildLayout, sourceInstallArguments, validateAdmission, verifyPublishedTarget, verifySnapshot, verifySnapshotSource } from './upgrade-worker.mjs';
 
 async function temporary(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-updater-test-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   return directory;
 }
+
+test('packaging descendants resolve the configured Node before any inherited system Node', () => {
+  const executable = path.resolve('fixture-tools/node.exe');
+  const inherited = { Path: 'system-node', PATH: 'other-tools', KEEP: 'unchanged' };
+  const env = sourceBuildEnvironment({ tools: { node: { executable } } }, 'preset-root', inherited, 'win32');
+  assert.equal(env.PATH, [path.dirname(executable), 'system-node', 'other-tools'].join(path.delimiter));
+  assert.equal(env.Path, undefined);
+  assert.equal(env.KEEP, 'unchanged');
+  assert.equal(env.DSH_PACKAGING_CONFIG_DIR, 'preset-root');
+  assert.equal(inherited.Path, 'system-node');
+  const empty = sourceBuildEnvironment({ tools: { node: { executable } } }, 'preset-root', {}, 'win32');
+  assert.equal(empty.PATH, path.dirname(executable));
+});
 
 test('published alpha, beta, rc, stable ordering uses complete numeric prerelease identifiers', () => {
   const order = ['0.2.0-rc.2', '0.2.0', '0.2.1-alpha.5', '0.2.1-alpha.10', '0.2.1-beta.1', '0.2.1-rc.1', '0.2.1', '0.10.0'];
@@ -98,22 +109,16 @@ test('source cache refuses long, redirected-prone, relative and state-overlappin
 });
 
 test('short source cache claims only an empty owned directory and retains unfamiliar data', async t => {
-  // Hosted Windows runners may expose their temporary directory through an 8.3 alias.
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'db-')));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'db-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const config = { root: path.join(root, 'helper'), buildCacheDir: path.join(root, 'c'), tools: { powershell: { executable: path.join(process.env.SystemRoot ?? '', 'System32/WindowsPowerShell/v1.0/powershell.exe') } } };
-  const unknown = path.join(root, 'unknown');
-  for (const directory of [config.buildCacheDir, unknown]) {
-    await fs.mkdir(directory);
-    if (process.platform === 'win32') execFileSync(config.tools.powershell.executable, ['-NoProfile', '-NonInteractive', '-File', fileURLToPath(new URL('./tests/own-cache-fixture.ps1', import.meta.url)), '-CachePath', directory], { windowsHide: true });
-  }
   const layout = sourceBuildLayout(config, { commit: 'a'.repeat(40), tag: 'dsh-v0.2.1' }, 'b'.repeat(64));
   await ensureBuildCache(config, layout);
   const marker = JSON.parse(await fs.readFile(path.join(layout.cache, '.dsh-source-cache.json'), 'utf8'));
   await ensureBuildCache(config, layout);
   assert.equal(marker.schemaVersion, 1);
   await assert.rejects(ensureBuildCache({ ...config, root: path.join(root, 'different-helper') }, layout), /another updater/);
-  await fs.writeFile(path.join(unknown, 'retain.txt'), 'do not modify');
+  const unknown = path.join(root, 'unknown'); await fs.mkdir(unknown); await fs.writeFile(path.join(unknown, 'retain.txt'), 'do not modify');
   await assert.rejects(ensureBuildCache({ ...config, buildCacheDir: unknown }, { ...layout, cache: unknown, buildRoot: path.join(unknown, '0123456789abcdef') }), /Unfamiliar nonempty/);
   assert.equal(await fs.readFile(path.join(unknown, 'retain.txt'), 'utf8'), 'do not modify');
 });
@@ -257,4 +262,11 @@ test('dangling archived junction is recorded, isolated and restored without inve
   await assert.rejects(fs.stat(link), { code: 'ENOENT' });
   await fs.mkdir(absent);
   await assert.rejects(restoreTree(manifest), /target appeared during rollback/);
+});
+
+
+test('JSON subprocess results exclude stderr diagnostics but failures retain both streams', async () => {
+  const output = await run(process.execPath, ['-e', 'process.stderr.write("registry restored\\n"); process.stdout.write(JSON.stringify({restored:true}))']);
+  assert.deepEqual(JSON.parse(output), { restored: true });
+  await assert.rejects(run(process.execPath, ['-e', 'process.stdout.write("outgoing"); process.stderr.write("diagnostic"); process.exitCode=7']), error => error.processExited === true && /outgoing/.test(error.message) && /diagnostic/.test(error.message));
 });

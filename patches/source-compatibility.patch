@@ -1,5 +1,5 @@
 diff --git a/apps/desktop-host/src/index.ts b/apps/desktop-host/src/index.ts
-index 3086755b..c7be1bc0 100644
+index 3086755b0bf5da567f01531cef2093ee597c2fbb..b7361c67cd5e5ec5308c5e71f43c46ccc7949e01 100644
 --- a/apps/desktop-host/src/index.ts
 +++ b/apps/desktop-host/src/index.ts
 @@ -14,6 +14,7 @@ import { installDesktopUpdateTaskControl } from './update-tasks.ts'
@@ -21,6 +21,20 @@ index 3086755b..c7be1bc0 100644
    reportSkippedBundles('dsh', profile)
    const application = runProfile({
      environment: loadLayeredEnv('dsh'),
+@@ -76,11 +81,11 @@ async function main(): Promise<void> {
+       return
+     }
+     if (message.type !== 'update-tasks' || !('requestId' in message) || !Number.isSafeInteger(message.requestId)
+-      || !('action' in message) || !['inspect', 'lock', 'unlock'].includes(String(message.action))) return
++      || !('action' in message) || !['inspect', 'lock', 'unlock', 'inspect-source', 'lock-source'].includes(String(message.action))) return
+     void (async () => {
+       try {
+         if (stopping !== undefined || control.updateTasks === undefined) throw new Error('desktop update: Host is unavailable')
+-        const active = await control.updateTasks(message.action as 'inspect' | 'lock' | 'unlock')
++        const active = await control.updateTasks(message.action as 'inspect' | 'lock' | 'unlock' | 'inspect-source' | 'lock-source')
+         await send({ type: 'update-tasks', requestId: message.requestId, active })
+       } catch (error) {
+         await send({ type: 'update-tasks', requestId: message.requestId, active: true,
 @@ -90,6 +95,14 @@ async function main(): Promise<void> {
    })
    process.once('disconnect', () => { void stop() })
@@ -38,7 +52,7 @@ index 3086755b..c7be1bc0 100644
    await ctx.plugin(desktopOffice, {
 diff --git a/apps/desktop-host/src/source-update-health.ts b/apps/desktop-host/src/source-update-health.ts
 new file mode 100644
-index 00000000..5d08480b
+index 0000000000000000000000000000000000000000..5d08480b46add6f937250d2171205ed3631d0b5a
 --- /dev/null
 +++ b/apps/desktop-host/src/source-update-health.ts
 @@ -0,0 +1,59 @@
@@ -101,9 +115,58 @@ index 00000000..5d08480b
 +  for (const id of ids) profile.patches.push({ id, disabled: true })
 +  return ids.size
 +}
+diff --git a/apps/desktop-host/src/update-tasks.ts b/apps/desktop-host/src/update-tasks.ts
+index 6e37a8aed84c8a9eab591d374dc6572a53a09fac..7f4879584b296b8539441680b86437cae48baf55 100644
+--- a/apps/desktop-host/src/update-tasks.ts
++++ b/apps/desktop-host/src/update-tasks.ts
+@@ -4,6 +4,10 @@ import type { Context } from '@deepseek-ai/cordis'
+ import type {} from '@deepseek-ai/dsh-agent'
+ import type {} from '@deepseek-ai/dsh-jobs'
+ import type {} from '@deepseek-ai/dsh-client-connection'
++import type {} from '@deepseek-ai/dsh-schedule'
++
++/** Source installation also defers while any Host reminder can start new work. */
++export type DesktopUpdateTaskAction = 'inspect' | 'lock' | 'unlock' | 'inspect-source' | 'lock-source'
+ 
+ /**
+  * Whether stopping the Host now would interrupt work: a generating or tool-running
+@@ -25,7 +29,7 @@ export function hasDesktopActiveTasks(liveAgents: ReturnType<Context['agents']['
+  * @param ctx - Booted Desktop profile context; disposal removes the request listener.
+  * @returns Task inspector whose lock refuses new API requests, drains admitted requests, and rechecks work.
+  */
+-export function installDesktopUpdateTaskControl(ctx: Context): (action: 'inspect' | 'lock' | 'unlock') => Promise<boolean> {
++export function installDesktopUpdateTaskControl(ctx: Context): (action: DesktopUpdateTaskAction) => Promise<boolean> {
+   let locked = false
+   let lockGeneration = 0
+   let stopped = false
+@@ -48,7 +52,7 @@ export function installDesktopUpdateTaskControl(ctx: Context): (action: 'inspect
+     const agents = ctx.get('agents')
+     const jobs = ctx.get('jobs')
+     if (agents === undefined || jobs === undefined) throw new Error('desktop update: task services are unavailable')
+-    if (action === 'lock') {
++    if (action === 'lock' || action === 'lock-source') {
+       locked = true
+       const generation = ++lockGeneration
+       // Read requests are not tasks; admitted writes must finish before the final work check.
+@@ -57,6 +61,15 @@ export function installDesktopUpdateTaskControl(ctx: Context): (action: 'inspect
+       if (stopped) throw new Error('desktop update: Host is stopping')
+       if (generation !== lockGeneration) throw new Error('desktop update: admission lock was superseded')
+     }
++    if (action === 'inspect-source' || action === 'lock-source') {
++      const schedule = ctx.get('schedule')
++      const inspectedGeneration = lockGeneration
++      // Global reminders can restore unloaded Sessions and bypass connection/request admission.
++      const reminders = schedule === undefined ? [] : await schedule.catalog()
++      if (stopped) throw new Error('desktop update: Host is stopping')
++      if (action === 'lock-source' && inspectedGeneration !== lockGeneration) throw new Error('desktop update: admission lock was superseded')
++      if (reminders.some(reminder => reminder.status === 'active')) return true
++    }
+     return hasDesktopActiveTasks(agents.list(), jobs)
+   }
+ }
 diff --git a/apps/desktop-host/tests/source-update-health.spec.ts b/apps/desktop-host/tests/source-update-health.spec.ts
 new file mode 100644
-index 00000000..6927708b
+index 0000000000000000000000000000000000000000..6927708b210075cb5e061c454bf419940c4cba9b
 --- /dev/null
 +++ b/apps/desktop-host/tests/source-update-health.spec.ts
 @@ -0,0 +1,38 @@
@@ -146,7 +209,7 @@ index 00000000..6927708b
 +  })
 +})
 diff --git a/apps/desktop/scripts/electron-builder-config.mjs b/apps/desktop/scripts/electron-builder-config.mjs
-index 4b9cd27a..3d490e87 100644
+index 4b9cd27a8d5c1eee9219cfc9ca8b60b1c2562deb..3d490e87690b64016310cfd2b366c2508f7ff1ac 100644
 --- a/apps/desktop/scripts/electron-builder-config.mjs
 +++ b/apps/desktop/scripts/electron-builder-config.mjs
 @@ -107,6 +107,7 @@ export function createElectronBuilderConfig(
@@ -157,8 +220,68 @@ index 4b9cd27a..3d490e87 100644
        dshDesktopAppId: appId,
        dshDesktopUpdateChannel: update?.channel ?? 'nightly',
        ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),
+diff --git a/apps/desktop/scripts/electron-download-settings.ts b/apps/desktop/scripts/electron-download-settings.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0586a4697be6408f49bbcf35c12179a48915616d
+--- /dev/null
++++ b/apps/desktop/scripts/electron-download-settings.ts
+@@ -0,0 +1,15 @@
++/** Resolve a finite network deadline for the official Electron downloader. */
++
++/**
++ * Read DSH_DESKTOP_ELECTRON_DOWNLOAD_TIMEOUT_MS; absence uses fifteen minutes.
++ * @param environment Packaging environment; omitted uses the current process environment.
++ * @returns A positive integer timeout in milliseconds, at most one hour.
++ */
++export function electronDownloadTimeout(environment: NodeJS.ProcessEnv = process.env): number {
++  const value = environment.DSH_DESKTOP_ELECTRON_DOWNLOAD_TIMEOUT_MS ?? '900000'
++  const milliseconds = Number(value)
++  if (!/^[1-9]\d*$/u.test(value) || !Number.isSafeInteger(milliseconds) || milliseconds > 3_600_000) {
++    throw new Error('desktop runtime: DSH_DESKTOP_ELECTRON_DOWNLOAD_TIMEOUT_MS must be an integer from 1 to 3600000')
++  }
++  return milliseconds
++}
+diff --git a/apps/desktop/scripts/prepare-runtime.ts b/apps/desktop/scripts/prepare-runtime.ts
+index ba92fef0e65e025871a33549639b78eedbd70a2b..d35a5608cef6605dfca34cfa9651b68ef09b024e 100644
+--- a/apps/desktop/scripts/prepare-runtime.ts
++++ b/apps/desktop/scripts/prepare-runtime.ts
+@@ -1,7 +1,7 @@
+ /** Prepare Desktop resources and publish their versions after every preparation stage succeeds. */
+ 
+ import { execFileSync } from 'node:child_process'
+-import { chmodSync, cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
++import { chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+ import { createRequire } from 'node:module'
+ import { join } from 'node:path'
+ import { parseArgs } from 'node:util'
+@@ -10,6 +10,7 @@ import extractZip from 'extract-zip'
+ import { readPrimaryRuntime } from '../../../packages/skill/tool-workspace-dependencies/src/index.ts'
+ import { desktopTargetPlatform, resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
+ import { packagingStep } from './packaging-step.mjs'
++import { electronDownloadTimeout } from './electron-download-settings.ts'
+ import { preparePrimaryRuntime } from './prepare-primary-runtime.ts'
+ import { prepareDesktopCli } from './prepare-cli.ts'
+ import { prepareCommandLink } from './prepare-command-link.ts'
+@@ -23,8 +24,15 @@ type DesktopTarget = ReturnType<typeof desktopTargetPlatform>
+ async function prepareElectron({ platform, arch }: DesktopTarget): Promise<string> {
+   const require = createRequire(import.meta.url)
+   const { version } = require('electron/package.json') as { version: string }
+-  const archive = await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'download:electron',
+-    () => downloadArtifact({ version, platform, arch, artifactName: 'electron', cacheRoot: BUILD_PATHS.downloads }))
++  const timeout = electronDownloadTimeout()
++  mkdirSync(BUILD_PATHS.downloads, { recursive: true })
++  const temporary = mkdtempSync(join(BUILD_PATHS.downloads, '.electron-'))
++  let archive: string
++  try {
++    archive = await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'download:electron',
++      () => downloadArtifact({ version, platform, arch, artifactName: 'electron', cacheRoot: BUILD_PATHS.downloads,
++        tempDirectory: temporary, downloadOptions: { signal: AbortSignal.timeout(timeout) } }))
++  } finally { rmSync(temporary, { recursive: true, force: true }) }
+   rmSync(BUILD_PATHS.electron, { recursive: true, force: true })
+   await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'extract:electron', () => extractZip(archive, { dir: BUILD_PATHS.electron }))
+   const executable = join(BUILD_PATHS.electron, platform === 'win32' ? 'electron.exe' : 'Electron.app/Contents/MacOS/Electron')
 diff --git a/apps/desktop/scripts/smoke-packaged-runtime.ts b/apps/desktop/scripts/smoke-packaged-runtime.ts
-index 6c3c12c8..8e849ace 100644
+index 6c3c12c8572593a1f038ed39f4ff3da898cecf70..8e849ace1a648880e6a8e29732df7f0a4c49ef98 100644
 --- a/apps/desktop/scripts/smoke-packaged-runtime.ts
 +++ b/apps/desktop/scripts/smoke-packaged-runtime.ts
 @@ -1,5 +1,7 @@
@@ -202,7 +325,7 @@ index 6c3c12c8..8e849ace 100644
 +  await rm(absolute, { recursive: true })
 +}
 diff --git a/apps/desktop/scripts/test-host-updates.ts b/apps/desktop/scripts/test-host-updates.ts
-index ba0a63b8..940edfa0 100644
+index ba0a63b8f6d8977c4c4c45d0f233b5b3ddceda76..940edfa056d80f5533b97cb49e5eff872c8b4728 100644
 --- a/apps/desktop/scripts/test-host-updates.ts
 +++ b/apps/desktop/scripts/test-host-updates.ts
 @@ -27,6 +27,9 @@ try {
@@ -216,7 +339,7 @@ index ba0a63b8..940edfa0 100644
      { id: 'agent-preset-registry', config: { default: 'standard' } },
      { insert: [{ id: 'update-qualification', name: new URL('../tests/fixtures/host-update-control.mjs', import.meta.url).href }] },
 diff --git a/apps/desktop/src/account-backend.ts b/apps/desktop/src/account-backend.ts
-index 862b8f81..7803bdeb 100644
+index 862b8f81edb9ac3fbc6c75cd757238fd78df7364..7803bdeb46d3a9fbf60e7c7395748a6eb5c522fe 100644
 --- a/apps/desktop/src/account-backend.ts
 +++ b/apps/desktop/src/account-backend.ts
 @@ -80,7 +80,7 @@ export interface DesktopAccountBackend {
@@ -228,8 +351,30 @@ index 862b8f81..7803bdeb 100644
   * @returns account operations; watch callers own their subscriptions.
   */
  export function desktopAccountBackend(origin: string, invoke: AccountInvoke, cookies: () => Promise<string>): DesktopAccountBackend {
+diff --git a/apps/desktop/src/host-process.ts b/apps/desktop/src/host-process.ts
+index 948a88e6b0e3a439a719aea46e3b77843e412abc..36bfd6522c4f32a94841270506504fb0cf0090e7 100644
+--- a/apps/desktop/src/host-process.ts
++++ b/apps/desktop/src/host-process.ts
+@@ -240,7 +240,7 @@ export class DesktopHostProcess {
+    * @returns Whether live tasks would be affected. Locking drains admitted API requests before inspecting tasks;
+    * an unanswered drain fails at the control-request deadline without authorizing installation.
+    */
+-  async updateTasks(action: 'inspect' | 'lock' | 'unlock'): Promise<boolean> {
++  async updateTasks(action: 'inspect' | 'lock' | 'unlock' | 'inspect-source' | 'lock-source'): Promise<boolean> {
+     const response = await this.control({ type: 'update-tasks', action }, 10_000, 'desktop update: task inspection timed out')
+     if (response.type !== 'update-tasks') throw new Error('desktop update: Host answered with a different control response')
+     return response.active
+@@ -258,7 +258,7 @@ export class DesktopHostProcess {
+   }
+ 
+   private async control(
+-    request: { readonly type: 'update-tasks'; readonly action: 'inspect' | 'lock' | 'unlock' } | { readonly type: 'quit-inspection' },
++    request: { readonly type: 'update-tasks'; readonly action: 'inspect' | 'lock' | 'unlock' | 'inspect-source' | 'lock-source' } | { readonly type: 'quit-inspection' },
+     deadlineMs: number, deadlineMessage: string,
+   ): Promise<DesktopHostControlResponse> {
+     const child = this.child
 diff --git a/apps/desktop/src/ipc.ts b/apps/desktop/src/ipc.ts
-index fc19021f..8cff6680 100644
+index fc19021fa6047bf5ef2a1c5e65c510adda71ee08..8cff66803f7dad5b8438cea03c3bc2731336dd3c 100644
 --- a/apps/desktop/src/ipc.ts
 +++ b/apps/desktop/src/ipc.ts
 @@ -31,6 +31,7 @@ export const DESKTOP_IPC = {
@@ -241,7 +386,7 @@ index fc19021f..8cff6680 100644
  
  /** Desktop release update state rendered by desktop-owned UI. */
 diff --git a/apps/desktop/src/locale.ts b/apps/desktop/src/locale.ts
-index 5d9d4607..59173a26 100644
+index 5d9d4607c7d046006cb91d0ef41e5f7ba193b435..59173a264648bf2214e7322dd2da1015e5a316d4 100644
 --- a/apps/desktop/src/locale.ts
 +++ b/apps/desktop/src/locale.ts
 @@ -1,6 +1,13 @@
@@ -273,7 +418,7 @@ index 5d9d4607..59173a26 100644
    cliCommandTitle: '管理 dsh 命令',
    cliCommandLocation: 'Desktop 命令：{path}',
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 2afdfd71..32fc847e 100644
+index 2afdfd71948053aedd65f6a04a9ed9b279e13376..25b21fed0a89d91a0ff51db360706bab342e0228 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
 @@ -3,7 +3,7 @@ import { WINDOWS_TITLEBAR_HEIGHT } from './windows-layout.ts'
@@ -334,7 +479,16 @@ index 2afdfd71..32fc847e 100644
          analyticsEnabled = await welcomeBackend.analyticsEnabled().catch(() => false)
          if (!reportedLaunch) { reportedLaunch = true; void track('desktop_app_launch', {}) }
          stopAccount?.()
-@@ -586,6 +595,125 @@ async function main(): Promise<void> {
+@@ -507,7 +516,7 @@ async function main(): Promise<void> {
+           updateStopFailure = error
+         }
+       },
+-      updateTasks: (action: 'inspect' | 'lock' | 'unlock') => host.updateTasks(action),
++      updateTasks: (action: Parameters<typeof host.updateTasks>[0]) => host.updateTasks(action),
+       inspectQuit: () => host.inspectQuit(),
+     }
+   }, (state) => {
+@@ -586,6 +595,129 @@ async function main(): Promise<void> {
  
    const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
    const updateChannel = desktopUpdateChannel(manifest)
@@ -348,6 +502,7 @@ index 2afdfd71..32fc847e 100644
 +  let sourceDraftPersistenceFailed = false
 +  let sourceRendererSeen = false
 +  let sourceUpdater: DesktopSourceUpdater | undefined
++  let sourceWarningKey: string | undefined
 +  const sourceLaunch = (): void => {
 +    lastSourceInput = Date.now()
 +    void sourceUpdater?.launch()
@@ -382,7 +537,7 @@ index 2afdfd71..32fc847e 100644
 +        const host = backend.host
 +        if (host === undefined || mainWindow === undefined || mainWindow.isDestroyed()) return false
 +        await commandManager.idle()
-+        return !await host.updateTasks('inspect')
++        return !await host.updateTasks('inspect-source')
 +      },
 +      prepareInstall: async () => {
 +        if (quitting || recovery.active || sourcePolicyPending()
@@ -391,10 +546,10 @@ index 2afdfd71..32fc847e 100644
 +        const host = backend.host
 +        if (host === undefined || mainWindow === undefined || mainWindow.isDestroyed()) return false
 +        await commandManager.idle()
-+        if (await host.updateTasks('inspect')) return false
++        if (await host.updateTasks('inspect-source')) return false
 +        sourceInputBlocked = true
 +        try {
-+          if (sourceIdleMilliseconds() < 60_000 || backend.host !== host || await host.updateTasks('lock')) {
++          if (sourceIdleMilliseconds() < 60_000 || backend.host !== host || await host.updateTasks('lock-source')) {
 +            await host.updateTasks('unlock')
 +            sourceInputBlocked = false
 +            return false
@@ -428,6 +583,9 @@ index 2afdfd71..32fc847e 100644
 +      publish: (state) => {
 +        console.info('desktop source update:', state.phase, state.detail ?? '')
 +        if (['blocked', 'failed', 'rolled-back', 'recovery-required'].includes(state.phase)) {
++          const warningKey = JSON.stringify([state.phase, state.target?.commit, state.detail])
++          if (warningKey === sourceWarningKey) return
++          sourceWarningKey = warningKey
 +          void ordinaryMessageBox({ type: 'warning', title: locale.messages.sourceUpdateTitle,
 +            message: state.phase === 'recovery-required' ? locale.messages.sourceUpdateRecoveryRequired
 +              : state.phase === 'blocked' ? locale.messages.sourceUpdateBlocked : locale.messages.sourceUpdateFailed,
@@ -460,7 +618,7 @@ index 2afdfd71..32fc847e 100644
    const updates = new DesktopUpdateCoordinator(
      publishUpdate,
      async () => {
-@@ -800,6 +928,7 @@ async function main(): Promise<void> {
+@@ -800,6 +932,7 @@ async function main(): Promise<void> {
    let promptOperation: Promise<void> | undefined
    let policyAuthenticationQueued = false
    const openUpdatePrompt = (manual = false): Promise<void> => {
@@ -468,7 +626,7 @@ index 2afdfd71..32fc847e 100644
      if (authenticationOperation !== undefined) {
        policyAuth?.focus(); updateDialog.focus()
      }
-@@ -920,6 +1049,7 @@ async function main(): Promise<void> {
+@@ -920,6 +1053,7 @@ async function main(): Promise<void> {
  
    const automaticCheck = (): void => {
      if (!quitting) void mandatoryPolicy?.check('foreground-or-resume').catch((error: unknown) => { console.error(error) })
@@ -476,7 +634,7 @@ index 2afdfd71..32fc847e 100644
      if (!quitting) void updateSchedule.check().catch((error: unknown) => { console.error(error) })
    }
    powerMonitor.on('resume', automaticCheck)
-@@ -960,6 +1090,8 @@ async function main(): Promise<void> {
+@@ -960,6 +1094,8 @@ async function main(): Promise<void> {
        : { label: currentDesktopLocale().messages.aboutMenu, role: 'about' },
      { type: 'separator' },
      { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
@@ -485,7 +643,7 @@ index 2afdfd71..32fc847e 100644
      ...process.platform === 'darwin' || process.platform === 'win32'
        ? [{ label: currentDesktopLocale().messages.cliCommandMenu, click: () => { void commandManager.show() } }] : [],
      ...development ? [
-@@ -1075,6 +1207,20 @@ async function main(): Promise<void> {
+@@ -1075,6 +1211,20 @@ async function main(): Promise<void> {
      browserGuests.bind(window, (guest, name) => shortcuts.attachGuest(window, guest, name))
      shortcuts.attach(window)
      window.on('focus', automaticCheck)
@@ -506,7 +664,7 @@ index 2afdfd71..32fc847e 100644
      // Closing hides: the page and the Host keep running, and the next show resumes the same document.
      window.on('close', (event) => {
        if (quitting || shellInstallerOwnsQuit || sessionEnding) return
-@@ -1330,6 +1476,7 @@ async function main(): Promise<void> {
+@@ -1330,6 +1480,7 @@ async function main(): Promise<void> {
      }).catch((error: unknown) => { console.error(error) })
    }
    automaticCheck()
@@ -514,7 +672,7 @@ index 2afdfd71..32fc847e 100644
    await reconcileBackend().catch(() => undefined)
    // Window lifecycle callbacks run while backend startup is pending.
    if (isQuitting()) return
-@@ -1342,9 +1489,35 @@ async function main(): Promise<void> {
+@@ -1342,9 +1493,35 @@ async function main(): Promise<void> {
  
  const ownsDesktopInstance = claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
  
@@ -552,7 +710,7 @@ index 2afdfd71..32fc847e 100644
    if (diagnosticFile !== undefined) {
      await writeFile(diagnosticFile, `${error instanceof Error ? error.stack ?? message : message}\n`).catch(() => undefined)
 diff --git a/apps/desktop/src/preload-app.ts b/apps/desktop/src/preload-app.ts
-index f590b8bc..d49447ad 100644
+index f590b8bc8b80a6ee007a0f36249097c77fb0b974..d49447ada62b44645ce1269c0e9c95ff6a2d0836 100644
 --- a/apps/desktop/src/preload-app.ts
 +++ b/apps/desktop/src/preload-app.ts
 @@ -59,6 +59,18 @@ function createProductApi(): DshDesktopProductApi {
@@ -576,7 +734,7 @@ index f590b8bc..d49447ad 100644
      setActive: (active: boolean) => { ipcRenderer.send(DESKTOP_IPC.onboardingActive, active) },
 diff --git a/apps/desktop/src/source-update-health.ts b/apps/desktop/src/source-update-health.ts
 new file mode 100644
-index 00000000..490d18ac
+index 0000000000000000000000000000000000000000..490d18ace4c766d201c174c5bcd6c729e07a4597
 --- /dev/null
 +++ b/apps/desktop/src/source-update-health.ts
 @@ -0,0 +1,107 @@
@@ -689,10 +847,10 @@ index 00000000..490d18ac
 +}
 diff --git a/apps/desktop/src/source-updater.ts b/apps/desktop/src/source-updater.ts
 new file mode 100644
-index 00000000..e6bbcdef
+index 0000000000000000000000000000000000000000..87545cbaf4a77598ca2ed2b3e7198a299b3688a2
 --- /dev/null
 +++ b/apps/desktop/src/source-updater.ts
-@@ -0,0 +1,408 @@
+@@ -0,0 +1,448 @@
 +/** Launch-triggered source updates; installation admission stays with the running Desktop owner. */
 +
 +import { spawn } from 'node:child_process'
@@ -917,7 +1075,7 @@ index 00000000..e6bbcdef
 +        }
 +        try {
 +          const state = parseDesktopSourceUpdateState(JSON.parse(output.trim().split(/\r?\n/u).at(-1) ?? '') as unknown)
-+          if (code !== 0 && !['blocked', 'failed'].includes(state.phase)) throw new Error('source updater: unsuccessful worker result')
++          if (code !== 0 && !['blocked', 'failed', 'check-unavailable', 'recovery-required'].includes(state.phase)) throw new Error('source updater: unsuccessful worker result')
 +          resolve(state)
 +        } catch (error) {
 +          const failure = error instanceof Error ? error : new Error(String(error))
@@ -952,6 +1110,8 @@ index 00000000..e6bbcdef
 +  private timer: ReturnType<typeof setTimeout> | undefined
 +  private disposed = false
 +  private switchBlocked = false
++  private blockedTarget: DesktopSourceTarget | undefined
++  private blockedState: DesktopSourceUpdateState | undefined
 +  private ready: DesktopSourceUpdateState | undefined
 +  private snapshot: DesktopSourceUpdateState = { phase: 'idle' }
 +
@@ -963,7 +1123,7 @@ index 00000000..e6bbcdef
 +
 +  /**
 +   * Check once on a cold or second launch; concurrent launches join existing work.
-+   * @param manualRetry - Explicit status-dialog action may retry a rejected update; opening the app cannot clear a failure latch.
++   * @param manualRetry - Explicit status-dialog action may retry a rejected candidate; ordinary opens still check for other published releases.
 +   * @returns Completion of the observed check and optional background build. Uncertain handoffs require local inspection.
 +   */
 +  launch(manualRetry = false): Promise<void> {
@@ -971,17 +1131,25 @@ index 00000000..e6bbcdef
 +    if (this.pending !== undefined) return this.pending
 +    if (this.admissionPending !== undefined) return this.admissionPending
 +    if (this.snapshot.phase === 'recovery-required') return Promise.resolve()
-+    if (this.switchBlocked && !manualRetry) return Promise.resolve()
 +    if (manualRetry) {
 +      this.switchBlocked = false
++      this.blockedTarget = undefined
++      this.blockedState = undefined
 +      this.ready = undefined
 +      if (this.timer !== undefined) clearTimeout(this.timer)
 +      this.timer = undefined
 +    }
-+    if (this.ready !== undefined) { this.scheduleAdmission(); return Promise.resolve() }
++    if (this.ready !== undefined) {
++      // An explicit reopen checks newer releases even while a prepared candidate waits for idle.
++      this.ready = undefined
++      if (this.timer !== undefined) clearTimeout(this.timer)
++      this.timer = undefined
++    }
 +    const pending = this.check(manualRetry).catch((error: unknown) => {
-+      this.switchBlocked = true
-+      this.publish({ phase: 'failed', detail: error instanceof Error ? error.message : String(error) })
++      const state = { phase: 'failed', ...(this.snapshot.target === undefined ? {} : { target: this.snapshot.target }),
++        detail: error instanceof Error ? error.message : String(error) }
++      this.blockSwitch(state)
++      this.publish(state)
 +    }).finally(() => { if (this.pending === pending) this.pending = undefined })
 +    this.pending = pending
 +    return pending
@@ -1001,29 +1169,60 @@ index 00000000..e6bbcdef
 +
 +  private isDisposed(): boolean { return this.disposed }
 +
++  private blockSwitch(state: DesktopSourceUpdateState): void {
++    this.switchBlocked = true
++    this.blockedTarget = state.target ?? this.ready?.target ?? this.blockedTarget
++    this.blockedState = state
++    this.ready = undefined
++  }
++
 +  private async check(manualRetry: boolean): Promise<void> {
++    const blockedTarget = this.blockedTarget
++    const blockedState = this.blockedState
 +    this.publish({ phase: 'checking' })
-+    let checked = await this.options.run('check', { ...this.options.request, manualRetry })
-+    while (!this.isDisposed() && ['busy', 'building'].includes(checked.phase)) {
-+      this.publish(checked)
-+      await new Promise<void>((resolveWait) => { setTimeout(resolveWait, 1_000) })
-+      if (this.isDisposed()) return
-+      checked = await this.options.run('status', this.options.request)
-+    }
++    const checked = await this.observeWorker(await this.options.run('check', { ...this.options.request, manualRetry }))
 +    if (this.isDisposed()) return
 +    this.publish(checked)
 +    if (checked.phase !== 'available' && checked.phase !== 'ready') {
-+      this.switchBlocked = ['failed', 'blocked', 'rolled-back', 'recovery-required'].includes(checked.phase)
++      if (['failed', 'blocked', 'rolled-back', 'recovery-required'].includes(checked.phase)) this.blockSwitch(checked)
++      else if (checked.phase !== 'check-unavailable') { this.switchBlocked = false; this.blockedTarget = undefined; this.blockedState = undefined }
 +      return
 +    }
 +    if (checked.target === undefined) throw new Error('source updater: release identity missing')
-+    const prepared = checked.phase === 'ready' ? checked : await this.options.run('prepare', { ...this.options.request, target: checked.target, manualRetry })
++    if (!manualRetry && this.switchBlocked && blockedTarget !== undefined
++      && checked.target.commit === blockedTarget.commit && checked.target.version === blockedTarget.version
++      && checked.target.tag === blockedTarget.tag) {
++      if (blockedState !== undefined) this.publish(blockedState)
++      return
++    }
++    this.switchBlocked = false
++    this.blockedTarget = undefined
++    this.blockedState = undefined
++    let prepared = checked
++    while (!this.isDisposed() && prepared.phase === 'available') {
++      if (prepared.target?.commit !== checked.target.commit || prepared.target.version !== checked.target.version
++        || prepared.target.tag !== checked.target.tag) throw new Error('source updater: shared preparation returned a different release')
++      prepared = await this.observeWorker(await this.options.run('prepare', { ...this.options.request, target: checked.target, manualRetry }))
++    }
 +    if (this.isDisposed()) return
-+    this.publish(prepared)
-+    if (prepared.phase !== 'ready') { this.switchBlocked = true; return }
++    if (prepared.phase !== 'ready') { this.publish(prepared); this.blockSwitch(prepared); return }
 +    if (prepared.target === undefined) throw new Error('source updater: prepared release identity missing')
++    if (prepared.target.commit !== checked.target.commit || prepared.target.version !== checked.target.version
++      || prepared.target.tag !== checked.target.tag) throw new Error('source updater: shared preparation returned a different release')
++    this.publish(prepared)
 +    this.ready = prepared
 +    this.scheduleAdmission()
++  }
++
++  private async observeWorker(initial: DesktopSourceUpdateState): Promise<DesktopSourceUpdateState> {
++    let state = initial
++    while (!this.isDisposed() && ['busy', 'building'].includes(state.phase)) {
++      this.publish(state)
++      await new Promise<void>((resolveWait) => { setTimeout(resolveWait, 1_000) })
++      if (this.isDisposed()) return state
++      state = await this.options.run('status', this.options.request)
++    }
++    return state
 +  }
 +
 +  private scheduleAdmission(): void {
@@ -1032,11 +1231,11 @@ index 00000000..e6bbcdef
 +      this.timer = undefined
 +      const admission = this.admit().catch((error: unknown) => {
 +        const target = this.ready?.target
-+        this.ready = undefined
-+        this.switchBlocked = true
-+        this.publish({ phase: error instanceof DesktopSourceHandoffError && error.outcome === 'unknown' ? 'recovery-required' : 'failed',
++        const state = { phase: error instanceof DesktopSourceHandoffError && error.outcome === 'unknown' ? 'recovery-required' : 'failed',
 +          ...(target === undefined ? {} : { target }),
-+          detail: error instanceof Error ? error.message : String(error) })
++          detail: error instanceof Error ? error.message : String(error) }
++        this.blockSwitch(state)
++        this.publish(state)
 +      }).finally(() => {
 +        if (this.admissionPending === admission) this.admissionPending = undefined
 +        this.scheduleAdmission()
@@ -1062,8 +1261,7 @@ index 00000000..e6bbcdef
 +    const verified = await this.options.run('preflight', { ...this.options.request, target: ready.target })
 +    if (this.isDisposed()) return
 +    if (verified.phase !== 'ready') {
-+      this.ready = undefined
-+      this.switchBlocked = true
++      this.blockSwitch(verified)
 +      this.publish(verified)
 +      return
 +    }
@@ -1102,7 +1300,7 @@ index 00000000..e6bbcdef
 +  }
 +}
 diff --git a/apps/desktop/src/web-document.ts b/apps/desktop/src/web-document.ts
-index a74ea7c7..1b544a4f 100644
+index a74ea7c7efd34bd916228bffa2bec782ef562c29..1b544a4feaedbda134ee9d156a0ddd1fa88a604a 100644
 --- a/apps/desktop/src/web-document.ts
 +++ b/apps/desktop/src/web-document.ts
 @@ -49,6 +49,25 @@ export async function authenticateWebHost(url: string): Promise<string> {
@@ -1132,7 +1330,7 @@ index a74ea7c7..1b544a4f 100644
   * Response headers not relayed to the renderer. `set-cookie` would hand the
   * Host's authentication cookie to the page's cookie jar, which the shell owns
 diff --git a/apps/desktop/src/welcome-backend.ts b/apps/desktop/src/welcome-backend.ts
-index 54ab46d8..e15b2934 100644
+index 54ab46d85ef6e81b67c5788ac15dcbc8b8730e4c..e15b2934c8173dbc0f4c11c3ed2246185c2c642d 100644
 --- a/apps/desktop/src/welcome-backend.ts
 +++ b/apps/desktop/src/welcome-backend.ts
 @@ -45,10 +45,25 @@ export async function connectDesktopWelcome(
@@ -1162,10 +1360,110 @@ index 54ab46d8..e15b2934 100644
    const invoke = async (
      request: { namespace: string; method: string; args: Record<string, unknown> },
      signal?: AbortSignal,
+diff --git a/apps/desktop/tests/electron-download-settings.spec.ts b/apps/desktop/tests/electron-download-settings.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6963ec720f53670aae447ee3b4043dbb52bb8a92
+--- /dev/null
++++ b/apps/desktop/tests/electron-download-settings.spec.ts
+@@ -0,0 +1,16 @@
++import { expect, it } from 'vitest'
++import { electronDownloadTimeout } from '../scripts/electron-download-settings.ts'
++
++it('defaults to fifteen minutes and accepts explicitly bounded integer milliseconds', () => {
++  expect(electronDownloadTimeout({})).toBe(900_000)
++  for (const value of ['1', '1500', '3600000']) {
++    expect(electronDownloadTimeout({ DSH_DESKTOP_ELECTRON_DOWNLOAD_TIMEOUT_MS: value })).toBe(Number(value))
++  }
++})
++
++it.each(['', '0', '-1', '1.5', '1e3', ' 1000', '1000 ', '3600001', '9007199254740993', 'Infinity'])(
++  'rejects invalid download timeout %s', (value) => {
++    expect(() => electronDownloadTimeout({ DSH_DESKTOP_ELECTRON_DOWNLOAD_TIMEOUT_MS: value }))
++      .toThrow('DSH_DESKTOP_ELECTRON_DOWNLOAD_TIMEOUT_MS')
++  },
++)
 diff --git a/apps/desktop/tests/fixtures/host-update-qualification.mjs b/apps/desktop/tests/fixtures/host-update-qualification.mjs
-index 4d09d86a..51cfc494 100644
+index 4d09d86a87aae8ebaa4fb69a633617393c2bae14..49b3e57dcaf3d8c751975f69761d51292335dcba 100644
 --- a/apps/desktop/tests/fixtures/host-update-qualification.mjs
 +++ b/apps/desktop/tests/fixtures/host-update-qualification.mjs
+@@ -58,14 +58,14 @@ try {
+   }
+   const model = new HeldModel()
+   ctx.effect(() => ctx.llm.registerAdapter(['update-qualification'], model))
+-  assert.equal(await host.updateTasks('inspect'), false)
++  assert.equal(await host.updateTasks('inspect-source'), false)
+   const owned = await ctx.agents.create({ sessionId: 'desktop-update-qualification', meta: { cwd: root },
+     agentOptions: { provider: 'update-qualification', model: 'held' },
+     setup: async agentCtx => { await ctx.agentPresets.mount(agentCtx, 'standard') } })
+   try {
+     const agent = owned.agent
+     assert.equal(ctx.agents.get(agent.id), agent)
+-    assert.equal(await host.updateTasks('inspect'), false)
++    assert.equal(await host.updateTasks('inspect-source'), false)
+     for (const createsTask of [false, true]) {
+       const entered = Promise.withResolvers()
+       const finish = Promise.withResolvers()
+@@ -81,9 +81,9 @@ try {
+         .then(async response => ({ status: response.status, body: await response.text() }))
+       try {
+         await entered.promise
+-        assert.equal(await host.updateTasks('inspect'), false)
++        assert.equal(await host.updateTasks('inspect-source'), false)
+         let drained = false
+-        const locking = host.updateTasks('lock').then(active => { drained = true; return active })
++        const locking = host.updateTasks('lock-source').then(active => { drained = true; return active })
+         assert.equal((await fetch(apiUrl, { headers: { cookie } })).status, 503)
+         assert.equal(drained, false)
+         finish.resolve()
+@@ -99,17 +99,17 @@ try {
+       agent.send(createUserMessage({ content: [{ type: 'text', text: 'Queued qualification input' }], source: { kind: 'user' } }), target, false)
+       assert.equal(agent.status, 'idle')
+       assert.equal(agent.inbox[field].length, 1)
+-      assert.equal(await host.updateTasks('inspect'), true)
++      assert.equal(await host.updateTasks('inspect-source'), true)
+       agent.inbox.clear()
+-      assert.equal(await host.updateTasks('inspect'), false)
++      assert.equal(await host.updateTasks('inspect-source'), false)
+       observed.push(target)
+     }
+     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Hold the qualification model request' }], source: { kind: 'user' } }))
+     const request = await entered.promise
+     assert.equal(agent.status, 'running')
+-    assert.equal(await host.updateTasks('inspect'), true)
++    assert.equal(await host.updateTasks('inspect-source'), true)
+     assert.equal(request.signal.aborted, false)
+-    assert.equal(await host.updateTasks('lock'), true)
++    assert.equal(await host.updateTasks('lock-source'), true)
+     assert.equal((await fetch(apiUrl, { headers: { cookie } })).status, 503)
+     assert.equal(request.signal.aborted, false)
+     assert.equal(agent.status, 'running')
+@@ -118,7 +118,7 @@ try {
+     agent.cancel({ kind: 'user' })
+     await agent.whenIdle()
+     assert.equal(request.signal.aborted, true)
+-    assert.equal(await host.updateTasks('inspect'), false)
++    assert.equal(await host.updateTasks('inspect-source'), false)
+     observed.push('running-model', 'admission-lock-preserves-running-work', 'unlock-restores-requests')
+ 
+     for (const event of ['user-questions/request', 'approval/request']) {
+@@ -147,14 +147,14 @@ try {
+         })])
+         assert.equal(question.signal.aborted, false)
+         assert.equal(agent.status, 'running')
+-        assert.equal(await host.updateTasks('inspect'), true)
+-        assert.equal(await host.updateTasks('lock'), true)
++        assert.equal(await host.updateTasks('inspect-source'), true)
++        assert.equal(await host.updateTasks('lock-source'), true)
+         assert.equal(question.signal.aborted, false)
+         await host.updateTasks('unlock')
+         agent.cancel({ kind: 'user' })
+         await agent.whenIdle()
+         assert.equal(question.signal.aborted, true)
+-        assert.equal(await host.updateTasks('inspect'), false)
++        assert.equal(await host.updateTasks('inspect-source'), false)
+         observed.push(event)
+       } finally {
+         agent.cancel({ kind: 'user' })
 @@ -164,7 +164,7 @@ try {
      }
  
@@ -1175,8 +1473,144 @@ index 4d09d86a..51cfc494 100644
        let child
        let done
        const id = ctx.jobs.start({ kind: 'update-qualification', label: 'Private Node process waiting for stdin EOF', owner,
+@@ -182,14 +182,14 @@ try {
+       try {
+         await once(child.stdout, 'data', { signal: AbortSignal.timeout(15_000) })
+         assert.equal(ctx.jobs.get(id, owner).status, 'running')
+-        assert.equal(await host.updateTasks('inspect'), true)
++        assert.equal(await host.updateTasks('inspect-source'), true)
+         assert.equal(child.exitCode, null)
+         assert.equal(ctx.jobs.kill(id, owner, 'Explicit qualification stop'), 'requested')
+         assert.equal(ctx.jobs.get(id, owner).status, 'stopping')
+-        assert.equal(await host.updateTasks('inspect'), true)
++        assert.equal(await host.updateTasks('inspect-source'), true)
+         assert.equal((await ctx.jobs.wait(id, 15_000, owner)).status, 'killed')
+         assert.deepEqual(await done, { code: 0, signal: null })
+-        assert.equal(await host.updateTasks('inspect'), false)
++        assert.equal(await host.updateTasks('inspect-source'), false)
+         observed.push(owner === undefined ? 'global-node-job' : 'agent-node-job')
+       } finally {
+         child.stdin.end()
+@@ -198,8 +198,8 @@ try {
+     }
+   } finally { await owned.dispose() }
+ } finally { await host.dispose() }
+-await assert.rejects(host.updateTasks('inspect'), /Host is stopping/)
+-await assert.rejects(host.updateTasks('lock'), /Host is stopping/)
++await assert.rejects(host.updateTasks('inspect-source'), /Host is stopping/)
++await assert.rejects(host.updateTasks('lock-source'), /Host is stopping/)
+ observed.push('disposed-host-refuses-task-inspection')
+ await writeFile(join(root, 'result.json'), JSON.stringify({ realHost: true, realAgent: true, observed,
+   model: 'scripted/held adapter', humanAnswers: 'held answerers', jobs: 'actual Node subprocesses',
+diff --git a/apps/desktop/tests/host-process.spec.ts b/apps/desktop/tests/host-process.spec.ts
+index daeddc74d0afc1315b0c632f61d2034bd0c9e31a..9a784490bf255d1551be140e9dde175d63e4053f 100644
+--- a/apps/desktop/tests/host-process.spec.ts
++++ b/apps/desktop/tests/host-process.spec.ts
+@@ -31,7 +31,7 @@ server.listen(0, '127.0.0.1', () => {
+ })
+ process.on('message', message => {
+   if (message.type === 'update-tasks') {
+-    process.send({ type: 'update-tasks', requestId: message.requestId, active: message.action === 'lock' })
++    process.send({ type: 'update-tasks', requestId: message.requestId, active: message.action === 'lock' || message.action === 'lock-source' })
+     return
+   }
+   if (message.type === 'quit-inspection') {
+@@ -77,8 +77,8 @@ describe('desktop host process', () => {
+     const host = hostProcess(projectWithHost())
+     await expect(host.updateTasks('inspect')).rejects.toThrow('Host is unavailable')
+     await host.start()
+-    expect(await Promise.all([host.updateTasks('inspect'), host.updateTasks('lock'), host.updateTasks('unlock')]))
+-      .toEqual([false, true, false])
++    expect(await Promise.all([host.updateTasks('inspect'), host.updateTasks('lock'), host.updateTasks('unlock'), host.updateTasks('inspect-source'), host.updateTasks('lock-source')]))
++      .toEqual([false, true, false, false, true])
+     await host.stop(true)
+     await expect(host.updateTasks('inspect')).rejects.toThrow('Host is unavailable')
+   })
+diff --git a/apps/desktop/tests/host-update-tasks.spec.ts b/apps/desktop/tests/host-update-tasks.spec.ts
+index 52c92b52ea0347e0b2f358006d5e865003f18fe3..acd074bd3fe37f21954166581e7bebc1fb89f913 100644
+--- a/apps/desktop/tests/host-update-tasks.spec.ts
++++ b/apps/desktop/tests/host-update-tasks.spec.ts
+@@ -1,4 +1,5 @@
+ import { Context } from '@deepseek-ai/cordis'
++import { ScheduleService } from '@deepseek-ai/dsh-schedule'
+ import { JobId, JobRegistry } from '@deepseek-ai/dsh-jobs'
+ import type { JobStatus, JobView } from '@deepseek-ai/dsh-jobs'
+ import { SessionId } from '@deepseek-ai/dsh-session/types'
+@@ -58,7 +59,72 @@ function request(next: () => Promise<void>) {
+   return { response, done: ctx.waterfall('connection/request', incoming, response as unknown as ServerResponse, next) }
+ }
+ 
++/** Serve only the catalog contract without constructing a real reminder timer or storage. */
++function provideCatalog(catalog: Context['schedule']['catalog']) {
++  ctx.provide('schedule', new Proxy(ScheduleService.prototype, {
++    get(target, key, receiver) { return key === 'catalog' ? catalog : Reflect.get(target, key, receiver) },
++  }))
++}
++
+ describe('Desktop Host update task protection', () => {
++  it('defers source switching for a global reminder whose Session is not loaded', async () => {
++    const reminders = [{ status: 'active' as const }];
++    const catalog = vi.fn(async () => reminders as Awaited<ReturnType<Context['schedule']['catalog']>>)
++    provideCatalog(catalog)
++    expect(agents).toHaveLength(0)
++    expect(await inspect('inspect')).toBe(false)
++    expect(await inspect('inspect-source')).toBe(true)
++    expect(await inspect('lock-source')).toBe(true)
++    await inspect('unlock')
++    expect(await inspect('lock')).toBe(false)
++    await inspect('unlock')
++    const admitted = vi.fn(async () => {})
++    await request(admitted).done
++    expect(admitted).toHaveBeenCalledOnce()
++    reminders.length = 0
++    expect(await inspect('inspect-source')).toBe(false)
++  })
++
++  it('does not treat a failed reminder catalog as safe and permits recovery unlock', async () => {
++    provideCatalog(async () => { throw new Error('reminders unavailable') })
++    await expect(inspect('lock-source')).rejects.toThrow('reminders unavailable')
++    await inspect('unlock')
++    const admitted = vi.fn(async () => {})
++    await request(admitted).done
++    expect(admitted).toHaveBeenCalledOnce()
++  })
++
++  it('rechecks work started while awaiting the reminder catalog', async () => {
++    const entered = Promise.withResolvers<void>()
++    const finish = Promise.withResolvers<void>()
++    provideCatalog(async () => { entered.resolve(); await finish.promise; return [] })
++    const inspecting = inspect('inspect-source')
++    await entered.promise
++    const agent = idleAgent(); agent.status = 'running'; agents.push(agent)
++    finish.resolve()
++    expect(await inspecting).toBe(true)
++  })
++
++  it('refuses a source lock unlocked while its catalog was pending', async () => {
++    const entered = Promise.withResolvers<void>()
++    const finish = Promise.withResolvers<void>()
++    provideCatalog(async () => { entered.resolve(); await finish.promise; return [] })
++    const locking = inspect('lock-source')
++    const rejected = expect(locking).rejects.toThrow('admission lock was superseded')
++    await entered.promise
++    await inspect('unlock')
++    finish.resolve()
++    await rejected
++  })
++
++  it('allows inactive reminders without changing their saved state', async () => {
++    const reminders = [{ status: 'inactive' as const }]
++    provideCatalog(async () => reminders as Awaited<ReturnType<Context['schedule']['catalog']>>)
++    expect(await inspect('lock-source')).toBe(false)
++    expect(reminders).toEqual([{ status: 'inactive' }])
++    await inspect('unlock')
++  })
++
+   it.each(['running', 'nextTurn', 'nextStep'] as const)('counts %s agent work without stopping it', async (kind) => {
+     const agent = idleAgent()
+     if (kind === 'running') agent.status = 'running'
 diff --git a/apps/desktop/tests/main-startup.spec.ts b/apps/desktop/tests/main-startup.spec.ts
-index d9a8f310..7c3126b7 100644
+index d9a8f3103b2a963ebf6825c62a86e8ee12064deb..7c3126b724b24f0c30cad0bcdc58ee094c6e728b 100644
 --- a/apps/desktop/tests/main-startup.spec.ts
 +++ b/apps/desktop/tests/main-startup.spec.ts
 @@ -16,7 +16,7 @@ import { writeCrashReport } from '../src/crash-report.ts'
@@ -1197,9 +1631,113 @@ index d9a8f310..7c3126b7 100644
      analyticsEnabled: async () => harness.analyticsEnabled,
      report: harness.analytics,
      readLocalePreference: async () => null,
+diff --git a/apps/desktop/tests/runtime-preparation.spec.ts b/apps/desktop/tests/runtime-preparation.spec.ts
+index d16dd592c2c4bf1fdbc7837922f347e336363b27..f47eefad5a11acebc479cdb6be016f06498d7b93 100644
+--- a/apps/desktop/tests/runtime-preparation.spec.ts
++++ b/apps/desktop/tests/runtime-preparation.spec.ts
+@@ -1,7 +1,8 @@
+ /** Desktop resource preparation publishes versions only for complete resources. */
+ 
+ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+-import { rm } from 'node:fs/promises'
++import { readdir, rm } from 'node:fs/promises'
++import { createServer } from 'node:http'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+@@ -13,6 +14,7 @@ const state = vi.hoisted(() => ({
+   failure: undefined as 'electron' | 'primary' | 'cli' | undefined,
+   preparePrimary: vi.fn(),
+   commandLink: vi.fn(),
++  download: vi.fn(),
+ }))
+ vi.mock('../scripts/desktop-build-paths.mjs', async importOriginal => ({
+   ...await importOriginal<typeof import('../scripts/desktop-build-paths.mjs')>(),
+@@ -21,7 +23,7 @@ vi.mock('../scripts/desktop-build-paths.mjs', async importOriginal => ({
+     runtime: join(state.root, 'runtime'), electron: join(state.root, 'electron'), downloads: join(state.root, 'downloads'),
+   }),
+ }))
+-vi.mock('@electron/get', () => ({ downloadArtifact: async () => 'electron.zip' }))
++vi.mock('@electron/get', () => ({ downloadArtifact: state.download }))
+ vi.mock('extract-zip', () => ({ default: async () => {
+   if (state.failure === 'electron') throw new Error('Electron extraction failed')
+ } }))
+@@ -54,6 +56,8 @@ beforeEach(() => {
+   state.failure = undefined
+   process.argv = [process.execPath, 'prepare-runtime.ts']
+   vi.stubEnv('DSH_DESKTOP_PACKAGING_RUN_DIR', undefined)
++  vi.stubEnv('DSH_DESKTOP_ELECTRON_DOWNLOAD_TIMEOUT_MS', undefined)
++  state.download.mockResolvedValue('electron.zip')
+   state.preparePrimary.mockImplementation(async () => {
+     if (state.failure === 'primary') throw new Error('primary preparation failed')
+     const root = join(state.root, 'runtime', 'primary-runtime')
+@@ -91,10 +95,63 @@ it.each(['mac-arm64', 'mac-x64', 'win-x64'] as const)('prepares %s with one pnpm
+     schemaVersion: 1, node: '24.18.1', pnpm: '11.7.0',
+   })
+   expect(state.preparePrimary).toHaveBeenCalledWith({ deferSmoke: windows })
++  expect(state.download).toHaveBeenCalledWith(expect.objectContaining({
++    platform: windows ? 'win32' : 'darwin',
++    downloadOptions: { signal: expect.any(AbortSignal) },
++  }))
+   if (windows) expect(state.commandLink).not.toHaveBeenCalled()
+   else expect(state.commandLink).toHaveBeenCalledWith(join(runtime, 'cli'), target === 'mac-arm64' ? 'arm64' : 'x64', '12.0')
+ })
+ 
++it('rejects an invalid Electron network deadline before invoking the downloader or publishing versions', async () => {
++  vi.stubEnv('DSH_DESKTOP_ELECTRON_DOWNLOAD_TIMEOUT_MS', '0')
++  await expect(import('../scripts/prepare-runtime.ts')).rejects.toThrow('DSH_DESKTOP_ELECTRON_DOWNLOAD_TIMEOUT_MS')
++  expect(state.download).not.toHaveBeenCalled()
++  expect(state.preparePrimary).not.toHaveBeenCalled()
++  expect(existsSync(join(state.root, 'runtime', 'versions.json'))).toBe(false)
++})
++
++it.each(['archive', 'checksums'] as const)('bounds a stalled %s stream through the official downloader and cleans its owned temporary directory', async (stage) => {
++  const official = await vi.importActual<typeof import('@electron/get')>('@electron/get')
++  state.target = 'win-x64'
++  vi.stubEnv('DSH_DESKTOP_ELECTRON_DOWNLOAD_TIMEOUT_MS', '1500')
++  let bodyStarted = false
++  const requests: string[] = []
++  const server = createServer((request, response) => {
++    requests.push(request.url ?? '')
++    if (stage === 'checksums' && request.url === '/artifact.zip') {
++      response.end('complete archive fixture; checksum retrieval must still finish')
++      return
++    }
++    bodyStarted = true
++    response.writeHead(200, { 'content-type': 'application/zip', 'content-length': '1000000' })
++    response.write('partial Electron archive fixture')
++  })
++  try {
++    await new Promise<void>((resolve, reject) => {
++      server.once('error', reject)
++      server.listen(0, '127.0.0.1', resolve)
++    })
++    const address = server.address()
++    if (address === null || typeof address === 'string') throw new Error('Loopback server has no TCP address')
++    state.download.mockImplementation(async (details: Parameters<typeof official.downloadArtifact>[0]) => official.downloadArtifact({
++      ...details,
++      mirrorOptions: { resolveAssetURL: async request => `http://127.0.0.1:${address.port}/${request.artifactName === 'SHASUMS256.txt' ? 'SHASUMS256.txt' : 'artifact.zip'}` },
++    }))
++    await expect(import('../scripts/prepare-runtime.ts')).rejects.toMatchObject({ name: expect.stringMatching(/^(AbortError|TimeoutError)$/u) })
++    expect(bodyStarted).toBe(true)
++    expect(requests).toEqual(stage === 'archive' ? ['/artifact.zip'] : ['/artifact.zip', '/SHASUMS256.txt'])
++    expect(await readdir(join(state.root, 'downloads'))).toEqual([])
++    expect(state.preparePrimary).not.toHaveBeenCalled()
++    expect(existsSync(join(state.root, 'runtime', 'versions.json'))).toBe(false)
++  } finally {
++    server.closeAllConnections()
++    await new Promise<void>((resolve, reject) => {
++      server.close(error => { if (error) reject(error); else resolve() })
++    })
++  }
++}, 10_000)
++
+ it.each([
+   ['electron', 'Electron extraction failed'],
+   ['primary', 'primary preparation failed'],
 diff --git a/apps/desktop/tests/source-update-health.spec.ts b/apps/desktop/tests/source-update-health.spec.ts
 new file mode 100644
-index 00000000..a5a684b7
+index 0000000000000000000000000000000000000000..a5a684b78601cc62d0b24a2d976cfac76947b41d
 --- /dev/null
 +++ b/apps/desktop/tests/source-update-health.spec.ts
 @@ -0,0 +1,83 @@
@@ -1288,7 +1826,7 @@ index 00000000..a5a684b7
 +})
 diff --git a/apps/desktop/tests/source-updater-paths.spec.ts b/apps/desktop/tests/source-updater-paths.spec.ts
 new file mode 100644
-index 00000000..eb8aeeab
+index 0000000000000000000000000000000000000000..eb8aeeab6f12dc71aaf5d3a461fe4f6b7acd3202
 --- /dev/null
 +++ b/apps/desktop/tests/source-updater-paths.spec.ts
 @@ -0,0 +1,60 @@
@@ -1354,10 +1892,10 @@ index 00000000..eb8aeeab
 +})
 diff --git a/apps/desktop/tests/source-updater.spec.ts b/apps/desktop/tests/source-updater.spec.ts
 new file mode 100644
-index 00000000..6d347f00
+index 0000000000000000000000000000000000000000..0e5bfba371d8af3a3242dcbc95477acb1898192c
 --- /dev/null
 +++ b/apps/desktop/tests/source-updater.spec.ts
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,394 @@
 +import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 +import { DesktopSourceHandoffError, DesktopSourceUpdater, parseDesktopSourceUpdateState, type DesktopSourceUpdateState } from '../src/source-updater.ts'
 +
@@ -1404,6 +1942,94 @@ index 00000000..6d347f00
 +    expect(f.run).toHaveBeenCalledOnce()
 +    expect(vi.getTimerCount()).toBe(0)
 +    expect(f.quit).not.toHaveBeenCalled()
++  })
++
++  it('joins a preparation owned by another client and adopts its matching completed build', async () => {
++    const f = fixture()
++    f.run.mockImplementation(async action => action === 'check' ? { phase: 'available', target }
++      : action === 'prepare' ? { phase: 'busy', activePhase: 'available', target }
++        : { phase: 'ready', target })
++    const pending = f.updater.launch()
++    await vi.advanceTimersByTimeAsync(1_000)
++    await pending
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'prepare', 'status'])
++    expect(f.updater.state.phase).toBe('ready')
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++    f.run.mockResolvedValue({ phase: 'ready', target })
++    await expect(f.updater.launch()).resolves.toBeUndefined()
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'prepare', 'status', 'check'])
++  })
++
++  it('rechecks releases on reopen while an older prepared candidate waits and suspends its admission', async () => {
++    const f = fixture()
++    f.run.mockResolvedValue({ phase: 'ready', target })
++    await f.updater.launch()
++    const newer = { version: '0.2.1-rc.2', tag: 'dsh-v0.2.1-rc.2', commit: 'b'.repeat(40) }
++    const checked = Promise.withResolvers<DesktopSourceUpdateState>()
++    f.run.mockImplementation(async action => action === 'check' ? checked.promise : { phase: 'ready', target: newer })
++    const pending = f.updater.launch()
++    await vi.advanceTimersByTimeAsync(120_000)
++    expect(f.inspectInstall).not.toHaveBeenCalled()
++    expect(f.quit).not.toHaveBeenCalled()
++    checked.resolve({ phase: 'available', target: newer })
++    await pending
++    expect(f.updater.state).toMatchObject({ phase: 'ready', target: newer })
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'check', 'prepare'])
++  })
++
++  it('defers a prepared candidate when reopen cannot query releases and retries only on another launch', async () => {
++    const f = fixture()
++    f.run.mockResolvedValueOnce({ phase: 'ready', target }).mockResolvedValueOnce({ phase: 'check-unavailable', detail: 'offline' })
++    await f.updater.launch()
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(120_000)
++    expect(f.updater.state.phase).toBe('check-unavailable')
++    expect(vi.getTimerCount()).toBe(0)
++    expect(f.quit).not.toHaveBeenCalled()
++    f.run.mockResolvedValue({ phase: 'ready', target })
++    await f.updater.launch()
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'check', 'check'])
++    expect(f.updater.state.phase).toBe('ready')
++  })
++
++  it('does not install another release returned by a shared preparation', async () => {
++    const f = fixture()
++    f.run.mockImplementation(async action => action === 'check' ? { phase: 'available', target }
++      : action === 'prepare' ? { phase: 'busy', target }
++        : { phase: 'ready', target: { ...target, commit: 'b'.repeat(40) } })
++    const pending = f.updater.launch()
++    await vi.advanceTimersByTimeAsync(1_000)
++    await pending
++    expect(f.updater.state).toMatchObject({ phase: 'failed', target, detail: expect.stringContaining('different release') })
++    await vi.advanceTimersByTimeAsync(120_000)
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++  })
++
++  it('continues preparation when a competing check finishes before any build was started', async () => {
++    const f = fixture()
++    let attempts = 0
++    f.run.mockImplementation(async action => action === 'check' || action === 'status' ? { phase: 'available', target }
++      : action === 'prepare' ? { phase: ++attempts === 1 ? 'busy' : 'ready', target }
++        : { phase: 'applying', target })
++    const pending = f.updater.launch()
++    await vi.advanceTimersByTimeAsync(1_000)
++    await pending
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check','prepare','status','prepare'])
++    expect(f.updater.state.phase).toBe('ready')
++  })
++
++  it('rechecks an unavailable release service on another explicit launch without timer retries', async () => {
++    const f = fixture()
++    f.run.mockResolvedValueOnce({ phase: 'check-unavailable', detail: 'offline' }).mockResolvedValue({ phase: 'current' })
++    await f.updater.launch()
++    expect(f.updater.state.phase).toBe('check-unavailable')
++    await vi.advanceTimersByTimeAsync(120_000)
++    expect(f.run).toHaveBeenCalledOnce()
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++    await f.updater.launch()
++    expect(f.run).toHaveBeenCalledTimes(2)
++    expect(f.updater.state.phase).toBe('current')
++    expect(vi.getTimerCount()).toBe(0)
 +  })
 +
 +  it('retains the running app on offline checks, build failure, and incompatible plugins', async () => {
@@ -1468,11 +2094,28 @@ index 00000000..6d347f00
 +    expect(f.recoverInstall).not.toHaveBeenCalled()
 +    expect(f.updater.state).toMatchObject({ phase: 'blocked', detail: 'Plugin removed: adaptive' })
 +    await f.updater.launch()
-+    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'prepare', 'preflight'])
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'prepare', 'preflight', 'check'])
 +    expect(vi.getTimerCount()).toBe(0)
 +    f.run.mockImplementation(async action => ({ phase: action === 'check' ? 'available' : action === 'apply' ? 'applying' : 'ready', target }))
 +    await f.updater.launch(true)
 +    expect(f.run).toHaveBeenLastCalledWith('prepare', expect.objectContaining({ target }))
++    await vi.advanceTimersByTimeAsync(1_000)
++    expect(f.prepareInstall).toHaveBeenCalledOnce()
++    expect(f.quit).toHaveBeenCalledOnce()
++  })
++
++  it('checks again after a failed switch without retrying the same candidate, and follows a newer release', async () => {
++    const f = fixture()
++    f.run.mockImplementation(async action => action === 'preflight' ? { phase: 'blocked', target, detail: 'candidate rejected' }
++      : { phase: action === 'check' ? 'available' : 'ready', target })
++    await f.updater.launch()
++    await vi.advanceTimersByTimeAsync(1_000)
++    await f.updater.launch()
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check','prepare','preflight','check'])
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++    const newer = { version: '0.2.1-alpha.7', tag: 'dsh-v0.2.1-alpha.7', commit: 'b'.repeat(40) }
++    f.run.mockImplementation(async action => ({ phase: action === 'check' ? 'available' : action === 'apply' ? 'applying' : 'ready', target: newer }))
++    await f.updater.launch()
 +    await vi.advanceTimersByTimeAsync(1_000)
 +    expect(f.prepareInstall).toHaveBeenCalledOnce()
 +    expect(f.quit).toHaveBeenCalledOnce()
@@ -1649,7 +2292,7 @@ index 00000000..6d347f00
 +})
 diff --git a/apps/desktop/tests/source-worker-background.spec.ts b/apps/desktop/tests/source-worker-background.spec.ts
 new file mode 100644
-index 00000000..a8ea776f
+index 0000000000000000000000000000000000000000..a8ea776f6e3a700f9ce7335dc79e2103d6046c77
 --- /dev/null
 +++ b/apps/desktop/tests/source-worker-background.spec.ts
 @@ -0,0 +1,160 @@
@@ -1815,7 +2458,7 @@ index 00000000..a8ea776f
 +})
 diff --git a/apps/desktop/tests/source-worker-handoff.spec.ts b/apps/desktop/tests/source-worker-handoff.spec.ts
 new file mode 100644
-index 00000000..cc41fe1a
+index 0000000000000000000000000000000000000000..cc41fe1a1266d54d2851e957e63301c0e9a7419d
 --- /dev/null
 +++ b/apps/desktop/tests/source-worker-handoff.spec.ts
 @@ -0,0 +1,95 @@
@@ -1915,7 +2558,7 @@ index 00000000..cc41fe1a
 +  }
 +})
 diff --git a/apps/desktop/tests/web-document.spec.ts b/apps/desktop/tests/web-document.spec.ts
-index 0fd9b591..bb2f957b 100644
+index 0fd9b591b1572548b17565785c4a00c5b33f2b68..bb2f957bf8c9be7c5253c70833d4fcb4c94ce0aa 100644
 --- a/apps/desktop/tests/web-document.spec.ts
 +++ b/apps/desktop/tests/web-document.spec.ts
 @@ -2,7 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest'
@@ -1979,7 +2622,7 @@ index 0fd9b591..bb2f957b 100644
    const root = await mkdtemp(join(tmpdir(), 'desktop-web-'))
    roots.push(root)
 diff --git a/apps/desktop/tests/welcome-startup.spec.ts b/apps/desktop/tests/welcome-startup.spec.ts
-index 79152482..7aa09dcd 100644
+index 7915248243e408841a829b4f887face59d7bf419..7aa09dcd6e5430265d5c2c9fa88555f8c3b6b524 100644
 --- a/apps/desktop/tests/welcome-startup.spec.ts
 +++ b/apps/desktop/tests/welcome-startup.spec.ts
 @@ -1,4 +1,4 @@
