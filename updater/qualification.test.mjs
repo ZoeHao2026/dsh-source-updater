@@ -39,7 +39,7 @@ async function fixture(t) {
   return { directory, root, home, active, config, configPath, pinsPath, state, tx, journalPath, originals };
 }
 
-test('verified candidate pins and actual installed version advance together and permit the next released update', async t => {
+test('two consecutive verified updates advance qualification, and an interrupted second commit restores the first generation', async t => {
   const f = await fixture(t);
   await assertActivePlugins(f.config, f.home);
   await stageCompatiblePlugins(f.state.targetPlugins, f.home);
@@ -55,8 +55,52 @@ test('verified candidate pins and actual installed version advance together and 
   assert.equal(saved.stage, 'committing-updater-qualification');
   assert.equal(saved.qualification.files.pins.committedSha256, await hashFile(f.pinsPath));
   assert.equal(saved.qualification.files.config.committedSha256, await hashFile(f.configPath));
-  const nextTx = path.join(f.root, 'transactions', 'next'); await fs.mkdir(nextTx);
-  await snapshotUpdaterQualification({ ...currentConfig, configPath: f.configPath }, f.configPath, nextTx);
+  const firstGeneration = { config: await fs.readFile(f.configPath), pins: await fs.readFile(f.pinsPath) };
+  assert.notDeepEqual(firstGeneration.config, f.originals.config);
+  assert.notDeepEqual(firstGeneration.pins, f.originals.pins);
+  const nextTransaction = path.join(f.root, 'transactions', 'second'); await fs.mkdir(nextTransaction);
+  const nextQualification = await snapshotUpdaterQualification({ ...currentConfig, configPath: f.configPath }, f.configPath, nextTransaction);
+  assert.deepEqual(await fs.readFile(nextQualification.files.config.backupPath), firstGeneration.config);
+  assert.deepEqual(await fs.readFile(nextQualification.files.pins.backupPath), firstGeneration.pins);
+
+  const nextTarget = { version: '0.2.1', tag: 'dsh-v0.2.1', commit: 'b'.repeat(40) };
+  const nextCandidate = path.join(f.directory, 'second-candidate');
+  await fs.cp(f.state.targetPlugins[0].path, nextCandidate, { recursive: true });
+  const nextManifest = JSON.parse(await fs.readFile(path.join(nextCandidate, 'package.json'), 'utf8'));
+  nextManifest.version = `0.2.3+dsh.${nextTarget.version}`;
+  await atomicJson(path.join(nextCandidate, 'package.json'), nextManifest);
+  const nextArchive = path.join(f.directory, 'second-candidate.tgz'); await fs.writeFile(nextArchive, 'second-generation fixture-only archive');
+  const nextFiles = Object.fromEntries(await Promise.all(Object.keys(f.state.targetPlugins[0].files)
+    .map(async relative => [relative, await hashFile(path.join(nextCandidate, relative))])));
+  const nextState = { target: nextTarget, targetPlugins: [{ ...f.state.targetPlugins[0], version: nextManifest.version,
+    path: nextCandidate, files: nextFiles, archive: nextArchive, archiveSha256: await hashFile(nextArchive) }] };
+  const nextTx = { transaction: nextTransaction, qualification: nextQualification, stage: 'installed-validation' };
+  const nextJournal = path.join(nextTransaction, 'transaction.json');
+  await stageCompatiblePlugins(nextState.targetPlugins, f.home);
+  const interruptedPlan = await planUpdaterQualification(currentConfig, nextState, f.home, nextQualification);
+  nextQualification.planned = interruptedPlan;
+  await atomicJson(nextJournal, nextTx);
+  // The second transaction is interrupted after the new pins rename, before its config rename.
+  await atomicJson(f.pinsPath, interruptedPlan.pins.value);
+  await restoreUpdaterQualification(nextQualification);
+  assert.deepEqual(await fs.readFile(f.configPath), firstGeneration.config);
+  assert.deepEqual(await fs.readFile(f.pinsPath), firstGeneration.pins);
+  assert.notDeepEqual(await fs.readFile(f.pinsPath), f.originals.pins);
+  await verifyUpdaterQualification(nextQualification);
+  // Match the restored qualification to the preceding verified profile generation.
+  await stageCompatiblePlugins(f.state.targetPlugins, f.home);
+  await assertActivePlugins(currentConfig, f.home);
+
+  await stageCompatiblePlugins(nextState.targetPlugins, f.home);
+  const nextPlan = await planUpdaterQualification(currentConfig, nextState, f.home, nextQualification);
+  await commitUpdaterQualification(nextTx, nextJournal, nextPlan);
+  const finalConfig = JSON.parse(await fs.readFile(f.configPath, 'utf8'));
+  const finalPins = JSON.parse(await fs.readFile(f.pinsPath, 'utf8'));
+  assert.equal(finalConfig.currentVersion, nextTarget.version);
+  assert.deepEqual(finalPins.target, nextTarget);
+  assert.equal(finalPins.plugins[0].version, nextState.targetPlugins[0].version);
+  assert.deepEqual(finalPins.plugins[0].files, nextFiles);
+  await assertActivePlugins(finalConfig, f.home);
 });
 
 test('a modified promoted runtime cannot be promoted into a new trust record', async t => {
