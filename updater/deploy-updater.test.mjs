@@ -14,7 +14,7 @@ const repository = path.resolve(own, '..');
 const publicPluginAssets = path.join(repository, 'plugins');
 const execute = promisify(execFile);
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-kit-test-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-kit-test-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const assets = path.join(root, 'kit', 'plugins'); await fs.mkdir(assets, { recursive: true });
   const pins = JSON.parse(await fs.readFile(path.join(publicPluginAssets, 'baseline-pins.json'), 'utf8'));

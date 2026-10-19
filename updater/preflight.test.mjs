@@ -12,8 +12,7 @@ const execute = promisify(execFile);
 const worker = fileURLToPath(new URL('./upgrade-worker.mjs', import.meta.url));
 
 async function fixture(t, names = ['@local/adaptive', '@local/video', '@local/selector']) {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dp-'));
-  const root = await fs.realpath(temporary);
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'dp-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const config = { schemaVersion: 1, root: path.join(root, 'helper'), installDir: path.join(root, 'install'), userDataDir: path.join(root, 'electron'), sharedDataDir: path.join(root, 'home'), currentVersion: '0.2.0-rc.2', compatibilityPatch: path.join(root, 'fixed.patch'), compatibilityProbe: path.join(root, 'probe.mjs'), buildCacheDir: path.join(root, 'c'), plugins: [], tools: { powershell: { executable: path.join(process.env.SystemRoot ?? '', 'System32/WindowsPowerShell/v1.0/powershell.exe') } } };
   for (const key of ['root', 'installDir', 'userDataDir', 'sharedDataDir']) await fs.mkdir(config[key]);
@@ -348,11 +347,13 @@ test('manual retry never clears an interrupted recovery lock', async t => {
 
 test('a source preparation failure is quarantined before cold checks can start another full build', async t => {
   const f=await fixture(t,['@local/selector']);
+  await fs.mkdir(f.config.buildCacheDir);
+  if (process.platform === 'win32') await execute(f.config.tools.powershell.executable, ['-NoProfile', '-NonInteractive', '-File', fileURLToPath(new URL('./tests/own-cache-fixture.ps1', import.meta.url)), '-CachePath', f.config.buildCacheDir], { windowsHide: true });
   const counter=path.join(f.root,'git-invocations.txt');
   f.config.tools.git={executable:process.execPath,args:['-e',`require('node:fs').appendFileSync(${JSON.stringify(counter)},'invoked\\n');process.exit(7)`,'--']};
   await atomicJson(f.configPath,f.config);
   const prepared=await cli(f.configPath,'prepare',f.request,true);
-  assert.equal(prepared.code,1);assert.equal(prepared.state.phase,'failed');
+  assert.equal(prepared.code,1,prepared.state.detail);assert.equal(prepared.state.phase,'failed');
   assert.equal(await fs.readFile(counter,'utf8'),'invoked\n');
   assert.equal((await fs.readdir(path.join(f.config.root,'rejected-candidates'))).length,1);
   for(let i=0;i<2;i++){
