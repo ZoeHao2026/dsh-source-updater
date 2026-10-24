@@ -952,10 +952,10 @@ index 0000000000000000000000000000000000000000..490d18ace4c766d201c174c5bcd6c729
 +}
 diff --git a/apps/desktop/src/source-updater.ts b/apps/desktop/src/source-updater.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..87545cbaf4a77598ca2ed2b3e7198a299b3688a2
+index 0000000000000000000000000000000000000000..276f937e5df10fbd93505046dffeaba7f769b02d
 --- /dev/null
 +++ b/apps/desktop/src/source-updater.ts
-@@ -0,0 +1,448 @@
+@@ -0,0 +1,450 @@
 +/** Launch-triggered source updates; installation admission stays with the running Desktop owner. */
 +
 +import { spawn } from 'node:child_process'
@@ -1223,7 +1223,7 @@ index 0000000000000000000000000000000000000000..87545cbaf4a77598ca2ed2b3e7198a29
 +  /** @param options - Worker, status, idle, and graceful installation capabilities. */
 +  constructor(private readonly options: DesktopSourceUpdaterOptions) {}
 +
-+  /** Last observed helper result, for the native status and retry dialog. */
++  /** Current check/preparation state or observed helper result for the native status and retry dialog. */
 +  get state(): DesktopSourceUpdateState { return this.snapshot }
 +
 +  /**
@@ -1307,6 +1307,8 @@ index 0000000000000000000000000000000000000000..87545cbaf4a77598ca2ed2b3e7198a29
 +    while (!this.isDisposed() && prepared.phase === 'available') {
 +      if (prepared.target?.commit !== checked.target.commit || prepared.target.version !== checked.target.version
 +        || prepared.target.tag !== checked.target.tag) throw new Error('source updater: shared preparation returned a different release')
++      this.publish({ phase: 'building', target: checked.target,
++        detail: 'Preparing the pinned source release in the background; the current client remains available' })
 +      prepared = await this.observeWorker(await this.options.run('prepare', { ...this.options.request, target: checked.target, manualRetry }))
 +    }
 +    if (this.isDisposed()) return
@@ -1997,10 +1999,10 @@ index 0000000000000000000000000000000000000000..eb8aeeab6f12dc71aaf5d3a461fe4f6b
 +})
 diff --git a/apps/desktop/tests/source-updater.spec.ts b/apps/desktop/tests/source-updater.spec.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..0e5bfba371d8af3a3242dcbc95477acb1898192c
+index 0000000000000000000000000000000000000000..d2030d601de5f3d4b2ceb532d6b7379986130b20
 --- /dev/null
 +++ b/apps/desktop/tests/source-updater.spec.ts
-@@ -0,0 +1,394 @@
+@@ -0,0 +1,419 @@
 +import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 +import { DesktopSourceHandoffError, DesktopSourceUpdater, parseDesktopSourceUpdateState, type DesktopSourceUpdateState } from '../src/source-updater.ts'
 +
@@ -2037,6 +2039,31 @@ index 0000000000000000000000000000000000000000..0e5bfba371d8af3a3242dcbc95477acb
 +    await first
 +    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'prepare'])
 +    expect(f.quit).not.toHaveBeenCalled()
++  })
++
++  it('shows the pinned background build while preparation is pending without admitting installation', async () => {
++    const f = fixture()
++    const build = Promise.withResolvers<DesktopSourceUpdateState>()
++    const preparing = Promise.withResolvers<void>()
++    f.run.mockImplementation(async action => {
++      if (action === 'check') return { phase: 'available', target }
++      if (action === 'prepare') { preparing.resolve(); return build.promise }
++      return { phase: 'ready', target }
++    })
++    const pending = f.updater.launch()
++    await preparing.promise
++    expect(f.updater.state).toMatchObject({ phase: 'building', target, detail: expect.stringContaining('background') })
++    expect(f.states.at(-1)).toEqual(f.updater.state)
++    await vi.advanceTimersByTimeAsync(120_000)
++    expect(f.run.mock.calls.map(call => call[0])).toEqual(['check', 'prepare'])
++    expect(f.inspectInstall).not.toHaveBeenCalled()
++    expect(f.prepareInstall).not.toHaveBeenCalled()
++    expect(f.quit).not.toHaveBeenCalled()
++    expect(vi.getTimerCount()).toBe(0)
++    build.resolve({ phase: 'ready', target })
++    await pending
++    expect(f.updater.state).toMatchObject({ phase: 'ready', target })
++    expect(f.prepareInstall).not.toHaveBeenCalled()
 +  })
 +
 +  it('has no timer and no build when no newer published release exists', async () => {

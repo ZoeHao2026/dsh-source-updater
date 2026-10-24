@@ -15,8 +15,8 @@
   "baselinePinnedFiles": 77,
   "baselineSourceFiles": 106,
   "patchSha256": {
-    "source-changes.patch": "281e427e6782e2c65d7509b6b6ffd57c13b0b6ac6639b917c1f60e304b0a45d2",
-    "source-compatibility.patch": "af32a87248a24b7a9711bd0524cea4fe5fb3b7eee56545ad932a25a38d6f1383"
+    "source-changes.patch": "eb2d09fde05a05a0bd7162b076f04848e67db1978c729e8ec23a16fdea0f8f5e",
+    "source-compatibility.patch": "8b3ef9780b6d5a7aa2e415eac555c831e4255403295c4c1052f68b80f5af3b73"
   },
   "publicationLicenseForLocalContributions": "MIT"
 }
