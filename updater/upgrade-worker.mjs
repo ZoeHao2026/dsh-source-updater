@@ -818,7 +818,8 @@ async function prepareHistoryBaseline(config, request, tx) {
     await fs.cp(path.join(tx.snapshots.sharedDataDir.destination, 'sessions'), path.join(home, 'sessions'), { recursive: true, dereference: true });
     await run(path.join(request.installDir, 'DeepSeek Harness.exe'), [path.join(path.dirname(SELF), 'baseline-history.cjs'),
       '--install', request.installDir, '--home', home, '--output', baselinePath],
-    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_HOME: home }, timeoutMs: 600_000 });
+    { cwd: tx.transaction, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_HOME: home,
+      ELECTRON_LOG_FILE: path.join(tx.transaction, 'baseline-chromium.log') }, timeoutMs: 600_000 });
     baseline = { ...await json(baselinePath), programDigest, inventoryDigest };
     if (baseline.schemaVersion !== 1 || !Array.isArray(baseline.sessions)) throw new Blocked('Old-runtime history baseline was not measured');
     await atomicJson(cachePath, baseline);
@@ -827,20 +828,25 @@ async function prepareHistoryBaseline(config, request, tx) {
   return { path: baselinePath, version: baseline.version, readable: baseline.readable, preexistingUnreadable: baseline.preexistingUnreadable, programDigest, inventoryDigest };
 }
 
-async function health(config, executable, request, state, phase) {
+/** Run one private health process; a receipt succeeds only after its matching release and clean exit. */
+export async function health(config, executable, request, state, phase) {
   const token = randomUUID();
   const receiptPath = path.join(state.transaction, `${phase}-health.json`);
   const releasePath = path.join(state.transaction, `${phase}-release.json`);
   const healthRequestPath = path.join(state.transaction, `${phase}-request.json`);
   const launch = { schemaVersion: 1, token, phase, receiptPath, releasePath, homePath: state.isolatedSharedDataDir, userDataPath: state.isolatedUserDataDir, version: state.target.version, commit: state.target.commit, appId: 'com.deepseek.dsh', plugins: state.targetPlugins.map(item => ({ name: item.name, version: item.version })), disableSchedules: true, blockAdmissions: true };
   await atomicJson(healthRequestPath, launch);
-  const childEnvironment = { ...process.env, DSH_HOME: state.isolatedSharedDataDir, DSH_SOURCE_UPDATE_DISABLE_SCHEDULES: '1', DSH_SOURCE_UPDATER_CONFIG: config.configPath };
+  const chromiumLogPath = path.join(state.transaction, `${phase}-chromium.log`);
+  const childEnvironment = { ...process.env, DSH_HOME: state.isolatedSharedDataDir, DSH_SOURCE_UPDATE_DISABLE_SCHEDULES: '1', DSH_SOURCE_UPDATER_CONFIG: config.configPath,
+    ELECTRON_LOG_FILE: chromiumLogPath };
   delete childEnvironment.ELECTRON_RUN_AS_NODE;
   const diagnosticPath = path.join(state.transaction, `${phase}-health.log`);
   const diagnostic = await fs.open(diagnosticPath, 'ax');
   let child;
   try {
-    child = spawn(executable, [`--source-update-health=${healthRequestPath}`, `--user-data-dir=${state.isolatedUserDataDir}`], { detached: true, windowsHide: true, stdio: ['ignore', diagnostic.fd, diagnostic.fd], env: childEnvironment });
+    child = spawn(executable, [`--source-update-health=${healthRequestPath}`, `--user-data-dir=${state.isolatedUserDataDir}`,
+      '--enable-logging=file', `--log-file=${chromiumLogPath}`], { cwd: state.transaction, detached: true, windowsHide: true,
+      stdio: ['ignore', diagnostic.fd, diagnostic.fd], env: childEnvironment });
   } finally { await diagnostic.close(); }
   let launchError;
   child.once('error', error => { launchError = error; });
@@ -1113,7 +1119,7 @@ async function apply(config, request, update, runtime) {
   await update('validating', { ...state, phase: 'validating', transaction, detail: 'Validating isolated profile with schedules and admissions disabled' });
   tx.isolatedHealth = await health(config, state.unpackedApp, request, healthState, 'isolated');
   if (!config.dataProbe) throw new Blocked('A history and attachment parser probe is required before installation');
-  tx.dataProbe = await run(config.tools.node.executable, [config.dataProbe, '--source', state.sourcePath ?? path.join(state.buildRoot, 'source'), '--home', isolatedSharedDataDir, '--baseline', tx.historyBaseline.path, '--config', config.configPath], { timeoutMs: 600_000, env: { ...process.env, DSH_HOME: isolatedSharedDataDir } });
+  tx.dataProbe = await run(config.tools.node.executable, [config.dataProbe, '--source', state.sourcePath ?? path.join(state.buildRoot, 'source'), '--home', isolatedSharedDataDir, '--baseline', tx.historyBaseline.path, '--config', config.configPath], { cwd: transaction, timeoutMs: 600_000, env: { ...process.env, DSH_HOME: isolatedSharedDataDir } });
   const dataResult = parseDataProbe(tx.dataProbe);
   await assertNoWriters(config, request);
   await verifyUpdaterQualification(tx.qualification);

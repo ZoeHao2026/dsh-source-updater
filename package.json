@@ -11,7 +11,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test updater/upgrade-worker.test.mjs updater/worker-lock-races.test.mjs updater/installation-metadata.test.mjs updater/baseline-compatibility.test.mjs updater/deploy-updater.test.mjs updater/preflight.test.mjs updater/qualification.test.mjs plugins/tests/probe-selection.test.mjs",
+    "test": "node --test updater/upgrade-worker.test.mjs updater/worker-lock-races.test.mjs updater/health-isolation.test.mjs updater/installation-metadata.test.mjs updater/baseline-compatibility.test.mjs updater/deploy-updater.test.mjs updater/preflight.test.mjs updater/qualification.test.mjs plugins/tests/probe-selection.test.mjs",
     "verify:source": "python scripts/verify-public-source.py"
   }
 }
