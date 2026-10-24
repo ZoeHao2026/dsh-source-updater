@@ -523,7 +523,7 @@ index 5d9d4607c7d046006cb91d0ef41e5f7ba193b435..59173a264648bf2214e7322dd2da1015
    cliCommandTitle: '管理 dsh 命令',
    cliCommandLocation: 'Desktop 命令：{path}',
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 2afdfd71948053aedd65f6a04a9ed9b279e13376..25b21fed0a89d91a0ff51db360706bab342e0228 100644
+index 2afdfd71948053aedd65f6a04a9ed9b279e13376..a59f174af294f8e374cc43d66f641799a6455be8 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
 @@ -3,7 +3,7 @@ import { WINDOWS_TITLEBAR_HEIGHT } from './windows-layout.ts'
@@ -593,7 +593,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..25b21fed0a89d91a0ff51db360706bab
        inspectQuit: () => host.inspectQuit(),
      }
    }, (state) => {
-@@ -586,6 +595,129 @@ async function main(): Promise<void> {
+@@ -586,6 +595,131 @@ async function main(): Promise<void> {
  
    const manifest: unknown = JSON.parse(await readFile(join(app.getAppPath(), 'package.json'), 'utf8'))
    const updateChannel = desktopUpdateChannel(manifest)
@@ -718,12 +718,14 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..25b21fed0a89d91a0ff51db360706bab
 +      detail: `${locale.messages.sourceUpdateBuild}\n${state.phase}${state.target === undefined ? '' : `: ${state.target.version}`}\n${state.detail ?? ''}`,
 +      buttons: canRetry ? [locale.messages.sourceUpdateRetry, locale.messages.updateAcknowledge] : [locale.messages.updateAcknowledge],
 +      cancelId: canRetry ? 1 : 0 })
++    // A shell-prompt response is input, including a retry of an already prepared candidate.
++    lastSourceInput = Date.now()
 +    if (canRetry && result.response === 0) void sourceUpdater.launch(true)
 +  }
    const updates = new DesktopUpdateCoordinator(
      publishUpdate,
      async () => {
-@@ -800,6 +932,7 @@ async function main(): Promise<void> {
+@@ -800,6 +934,7 @@ async function main(): Promise<void> {
    let promptOperation: Promise<void> | undefined
    let policyAuthenticationQueued = false
    const openUpdatePrompt = (manual = false): Promise<void> => {
@@ -731,7 +733,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..25b21fed0a89d91a0ff51db360706bab
      if (authenticationOperation !== undefined) {
        policyAuth?.focus(); updateDialog.focus()
      }
-@@ -920,6 +1053,7 @@ async function main(): Promise<void> {
+@@ -920,6 +1055,7 @@ async function main(): Promise<void> {
  
    const automaticCheck = (): void => {
      if (!quitting) void mandatoryPolicy?.check('foreground-or-resume').catch((error: unknown) => { console.error(error) })
@@ -739,7 +741,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..25b21fed0a89d91a0ff51db360706bab
      if (!quitting) void updateSchedule.check().catch((error: unknown) => { console.error(error) })
    }
    powerMonitor.on('resume', automaticCheck)
-@@ -960,6 +1094,8 @@ async function main(): Promise<void> {
+@@ -960,6 +1096,8 @@ async function main(): Promise<void> {
        : { label: currentDesktopLocale().messages.aboutMenu, role: 'about' },
      { type: 'separator' },
      { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
@@ -748,7 +750,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..25b21fed0a89d91a0ff51db360706bab
      ...process.platform === 'darwin' || process.platform === 'win32'
        ? [{ label: currentDesktopLocale().messages.cliCommandMenu, click: () => { void commandManager.show() } }] : [],
      ...development ? [
-@@ -1075,6 +1211,20 @@ async function main(): Promise<void> {
+@@ -1075,6 +1213,20 @@ async function main(): Promise<void> {
      browserGuests.bind(window, (guest, name) => shortcuts.attachGuest(window, guest, name))
      shortcuts.attach(window)
      window.on('focus', automaticCheck)
@@ -769,7 +771,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..25b21fed0a89d91a0ff51db360706bab
      // Closing hides: the page and the Host keep running, and the next show resumes the same document.
      window.on('close', (event) => {
        if (quitting || shellInstallerOwnsQuit || sessionEnding) return
-@@ -1330,6 +1480,7 @@ async function main(): Promise<void> {
+@@ -1330,6 +1482,7 @@ async function main(): Promise<void> {
      }).catch((error: unknown) => { console.error(error) })
    }
    automaticCheck()
@@ -777,7 +779,7 @@ index 2afdfd71948053aedd65f6a04a9ed9b279e13376..25b21fed0a89d91a0ff51db360706bab
    await reconcileBackend().catch(() => undefined)
    // Window lifecycle callbacks run while backend startup is pending.
    if (isQuitting()) return
-@@ -1342,9 +1493,35 @@ async function main(): Promise<void> {
+@@ -1342,9 +1495,35 @@ async function main(): Promise<void> {
  
  const ownsDesktopInstance = claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
  
